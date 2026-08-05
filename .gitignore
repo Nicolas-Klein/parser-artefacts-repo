@@ -23,6 +23,9 @@ data/
 /src/zig-parser/build/
 /src/zig-parser/main
 /src/zig-parser/src/root.zig
+/src/zig-parser/zig-parser-artefact.o
+/src/zig-parser/zig-parser-artefact
+
 
 # ------------------------------------------------------------------------------
 # Python (Generator)
