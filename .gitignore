@@ -1,0 +1,45 @@
+# ------------------------------------------------------------------------------
+# Testdaten ausschließen (Niemals die 5 GB Log-Datei committen!)
+# ------------------------------------------------------------------------------
+*.log
+*.csv
+!benchmarks/results/*.csv  # Ausnahmen: Messergebnisse/Statistiken dürfen rein!
+data/
+
+# ------------------------------------------------------------------------------
+# Go
+# ------------------------------------------------------------------------------
+/src/go-parser/go-parser   # Das kompilierte Go-Executable
+/src/go-parser/bachelorarbeit
+/src/go-parser/go-parser-artefact
+*.exe
+
+# ------------------------------------------------------------------------------
+# Zig
+# ------------------------------------------------------------------------------
+/src/zig-parser/zig-cache/
+/src/zig-parser/.zig-cache/
+/src/zig-parser/zig-out/
+/src/zig-parser/build/
+/src/zig-parser/main
+/src/zig-parser/src/root.zig
+
+# ------------------------------------------------------------------------------
+# Python (Generator)
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ------------------------------------------------------------------------------
+# Betriebssystem & IDEs
+# ------------------------------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/
+old/
+*.prof
+commands
+,
+results.md
