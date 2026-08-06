@@ -1,5 +1,17 @@
 const std = @import("std");
 
+inline fn fastParseInt(b: []const u8) u16 {
+    var n: u16 = 0;
+
+    for (b) |ch| {
+        if (ch >= '0' and ch <= '9') {
+            n = n * 10 + @as(u16, ch - '0');
+        }
+    }
+
+    return n;
+}
+
 pub fn main() !void {
     // 1. GeneralPurposeAllocator (Baseline Stufe 1)
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -18,43 +30,47 @@ pub fn main() !void {
 
     const file_path = args[1];
 
-    std.debug.print("Starte Zig-Parser (Stufe 1: Baseline)...\n", .{});
+    std.debug.print("Starte Zig-Parser (Stufe 2: Zero-Copy & mmap)...\n", .{});
     const start_time = std.time.nanoTimestamp();
 
     // 3. Datei öffnen
     const file = try std.fs.cwd().openFile(file_path, .{});
     defer file.close();
 
-    // 4. Map für Statuscodes initialisieren
-    var status_counts = std.AutoHashMap(u16, u64).init(allocator);
-    defer status_counts.deinit();
+    const file_size = (try file.stat()).size;
+    if (file_size == 0) return;
 
+    // Memmory Mapping (mmap)
+
+    const ptr = try std.posix.mmap(null, file_size, std.posix.PROT.READ, .{ .TYPE = .SHARED }, file.handle, 0);
+    defer std.posix.munmap(ptr);
+
+    // Stack-basiertes Lookup-Array
+    var status_counts = [_]u64{0} ** 1000;
     var line_count: u64 = 0;
-    var line_buf: [4096]u8 = undefined;
 
-    var buf_reader = std.io.bufferedReader(file.reader());
-    var reader = buf_reader.reader();
+    // Direct Targeted Search
+    var line_iter = std.mem.splitScalar(u8, ptr, '\n');
 
-    // 5. Hauptschleife: Zeilenweise lesen
-    while (try reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
+    while (line_iter.next()) |line| {
+        if (line.len < 10) continue;
         line_count += 1;
 
-        var it = std.mem.splitScalar(u8, line, ' ');
-        var token_index: usize = 0;
+        // Wir suchen das letzte Anführungszeichen der HTTP-Anforderung ' " '
+        // In Logs: ... "GET /path HTTP/1.1" 200 1234
+        if (std.mem.lastIndexOfScalar(u8, line, '"')) |quote_pos| {
+            const rest = line[quote_pos + 1 ..];
+            // Überspringe führendes Leerzeichen nach dem Anführungszeichen
+            var idx: usize = 0;
+            while (idx < rest.len and rest[idx] == ' ') : (idx += 1) {}
 
-        while (it.next()) |token| {
-            if (token_index == 8) {
-                if (std.fmt.parseInt(u16, token, 10)) |code| {
-                    const entry = try status_counts.getOrPut(code);
-                    if (entry.found_existing) {
-                        entry.value_ptr.* += 1;
-                    } else {
-                        entry.value_ptr.* = 1;
-                    }
-                } else |_| {}
-                break;
+            // Der Statuscode ist 3 Stellen lang
+            if (idx + 3 <= rest.len) {
+                const code = fastParseInt(rest[idx .. idx + 3]);
+                if (code < 1000) {
+                    status_counts[code] += 1;
+                }
             }
-            token_index += 1;
         }
     }
 
@@ -67,8 +83,9 @@ pub fn main() !void {
     std.debug.print("Benötigte Zeit:      {d} ms\n", .{elapsed_ms});
     std.debug.print("Statuscode-Statistik:\n", .{});
 
-    var map_it = status_counts.iterator();
-    while (map_it.next()) |entry| {
-        std.debug.print("    HTTP {d}: {d}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+    for (status_counts, 0..) |count, code| {
+        if (count > 0) {
+            std.debug.print("    HTTP {d}: {d}\n", .{ code, count });
+        }
     }
 }

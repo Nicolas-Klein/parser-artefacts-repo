@@ -1,15 +1,27 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
 	"runtime/pprof"
-	"strconv"
-	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
+
+func fastParseInt(b []byte) int {
+	n := 0
+
+	for _, ch := range b {
+		if ch >= '0' && ch <= '9' {
+			n = n*10 + int(ch-'0')
+		}
+	}
+
+	return n
+}
 
 func main() {
 	profileFlag := flag.Bool("profile", false, "Aktiviert CPU- und Memory-Profiling")
@@ -34,6 +46,7 @@ func main() {
 
 	filepath := flag.Arg(0)
 
+	// Open File
 	file, err := os.Open(filepath)
 	if err != nil {
 		fmt.Printf("Fehler beim Öffnen der Datei: %v\n", err)
@@ -41,31 +54,63 @@ func main() {
 	}
 	defer file.Close()
 
+	// File size for mmap
+	fi, err := file.Stat()
+	if err != nil {
+		fmt.Printf("Fehler beim Abrufen der Dateigröße: %v\n", err)
+	}
+	size := int(fi.Size())
+
+	if size == 0 {
+		fmt.Println("Datei ist leer.")
+		return
+	}
+
+	data, err := unix.Mmap(int(file.Fd()), 0, size, unix.PROT_READ, unix.MAP_SHARED)
+	if err != nil {
+		fmt.Printf("mmap-Fehler: %v\n", err)
+		os.Exit(1)
+	}
+	defer unix.Munmap(data)
+
 	statusCounts := make(map[int]int)
 	var lineCount int64 = 0
 
-	fmt.Println("Starte Go-Parser (Stufe 1: Baseline)...")
+	fmt.Println("Starte Go-Parser (Stufe 2: Zero-Copy & mmap)...")
 	startTime := time.Now()
 
-	scanner := bufio.NewScanner(file)
+	i := 0
+	length := len(data)
 
-	for scanner.Scan() {
-		line := scanner.Text()
+	for i < length {
+		lineStart := i
+
+		for i < length && data[i] != '\n' {
+			i++
+		}
+
+		line := data[lineStart:i]
+		i++
 		lineCount++
 
-		parts := strings.Split(line, " ")
+		quotePos := bytes.LastIndexByte(line, '"')
+		if quotePos != -1 {
+			rest := line[quotePos+1:]
 
-		if len(parts) >= 9 {
-			statusStr := parts[8]
-			if status, err := strconv.Atoi(statusStr); err == nil {
-				statusCounts[status]++
+			// Führende Leerzeichen überspringen
+			idx := 0
+			for idx < len(rest) && rest[idx] == ' ' {
+				idx++
+			}
+
+			// Die 3 Stellen des HTTP-Statuscodes parsen
+			if idx+3 <= len(rest) {
+				code := fastParseInt(rest[idx : idx+3])
+				if code < 1000 {
+					statusCounts[code]++
+				}
 			}
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("Fehler beim Lesen der Datei: %v\n", err)
-		os.Exit(1)
 	}
 
 	elapsed := time.Since(startTime)
