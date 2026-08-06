@@ -12,6 +12,59 @@ inline fn fastParseInt(b: []const u8) u16 {
     return n;
 }
 
+const ThreadResult = struct {
+    counts: [1000]u64 = [_]u64{0} ** 1000,
+    line_count: u64 = 0,
+};
+
+fn processChunk(data: []const u8, start_pos: usize, end_pos: usize, result: *ThreadResult) void {
+    var start = start_pos;
+    var end = end_pos;
+
+    if (start > 0) {
+        while (start < end and data[start - 1] != '\n') {
+            start += 1;
+        }
+    }
+
+    if (end < data.len) {
+        while (end < data.len and data[end - 1] != '\n') {
+            end += 1;
+        }
+    }
+
+    var i = start;
+
+    while (i < end) {
+        const line_start = i;
+
+        while (i < end and data[i] != '\n') {
+            i += 1;
+        }
+
+        const line = data[line_start..i];
+        i += 1;
+
+        if (line.len < 10) continue;
+        result.line_count += 1;
+
+        if (std.mem.lastIndexOfScalar(u8, line, '"')) |quote_pos| {
+            const rest = line[quote_pos + 1 ..];
+            var idx: usize = 0;
+
+            while (idx < rest.len and rest[idx] == ' ') : (idx += 1) {}
+
+            if (idx + 3 <= rest.len) {
+                const code = fastParseInt(rest[idx .. idx + 3]);
+
+                if (code < 1000) {
+                    result.counts[code] += 1;
+                }
+            }
+        }
+    }
+}
+
 pub fn main() !void {
     // 1. GeneralPurposeAllocator (Baseline Stufe 1)
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -30,8 +83,10 @@ pub fn main() !void {
 
     const file_path = args[1];
 
-    std.debug.print("Starte Zig-Parser (Stufe 2: Zero-Copy & mmap)...\n", .{});
     const start_time = std.time.nanoTimestamp();
+
+    const cpu_count = std.Thread.getCpuCount() catch 1;
+    std.debug.print("Starte Zig-Parser (Stufe 3: Multi-Threading mit {d} Cores)...\n", .{cpu_count});
 
     // 3. Datei öffnen
     const file = try std.fs.cwd().openFile(file_path, .{});
@@ -45,43 +100,40 @@ pub fn main() !void {
     const ptr = try std.posix.mmap(null, file_size, std.posix.PROT.READ, .{ .TYPE = .SHARED }, file.handle, 0);
     defer std.posix.munmap(ptr);
 
-    // Stack-basiertes Lookup-Array
-    var status_counts = [_]u64{0} ** 1000;
-    var line_count: u64 = 0;
+    const threads = try allocator.alloc(std.Thread, cpu_count);
+    defer allocator.free(threads);
 
-    // Zeilen-Iterator über den mmap-Speicher (Stufe 2a)
-    var line_iter = std.mem.splitScalar(u8, ptr, '\n');
+    const results = try allocator.alloc(ThreadResult, cpu_count);
+    defer allocator.free(results);
 
-    while (line_iter.next()) |line| {
-        if (line.len == 0) continue;
-        line_count += 1;
+    for (results) |*res| {
+        res.* = ThreadResult{};
+    }
 
-        // --- Dein Vorwärts-Parsing für das 9. Token (Stufe 2a) ---
-        var space_count: u8 = 0;
-        var token_start: usize = 0;
-        var found_status = false;
+    const chunk_size = file_size / cpu_count;
 
-        var j: usize = 0;
-        while (j < line.len) : (j += 1) {
-            if (line[j] == ' ') {
-                if (space_count == 8) {
-                    const code = fastParseInt(line[token_start..j]);
-                    if (code < 1000) {
-                        status_counts[code] += 1;
-                    }
-                    found_status = true;
-                    break;
-                }
-                space_count += 1;
-                token_start = j + 1;
-            }
+    for (0..cpu_count) |w| {
+        const start = w * chunk_size;
+        var end = start + chunk_size;
+
+        if (w == cpu_count - 1) {
+            end = file_size;
         }
 
-        if (!found_status and space_count == 8) {
-            const code = fastParseInt(line[token_start..]);
-            if (code < 1000) {
-                status_counts[code] += 1;
-            }
+        threads[w] = try std.Thread.spawn(.{}, processChunk, .{ ptr, start, end, &results[w] });
+    }
+
+    for (threads) |thread| {
+        thread.join();
+    }
+
+    var total_status_counts = [_]u64{0} ** 1000;
+    var total_line_count: u64 = 0;
+
+    for (results) |res| {
+        total_line_count += res.line_count;
+        for (res.counts, 0..) |count, code| {
+            total_status_counts[code] += count;
         }
     }
 
@@ -90,11 +142,11 @@ pub fn main() !void {
 
     // 6. Ergebnisse ausgeben
     std.debug.print("\n--- Parsing abgeschlossen ---\n", .{});
-    std.debug.print("Verarbeitete Zeilen: {d}\n", .{line_count});
+    std.debug.print("Verarbeitete Zeilen: {d}\n", .{total_line_count});
     std.debug.print("Benötigte Zeit:      {d} ms\n", .{elapsed_ms});
     std.debug.print("Statuscode-Statistik:\n", .{});
 
-    for (status_counts, 0..) |count, code| {
+    for (total_status_counts, 0..) |count, code| {
         if (count > 0) {
             std.debug.print("    HTTP {d}: {d}\n", .{ code, count });
         }

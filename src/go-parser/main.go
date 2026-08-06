@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"runtime/pprof"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -20,6 +23,70 @@ func fastParseInt(b []byte) int {
 	}
 
 	return n
+}
+
+type parseResult struct {
+	counts    [1000]int64
+	lineCount int64
+}
+
+func processChunck(data []byte, start, end int, wg *sync.WaitGroup, resultChan chan<- parseResult) {
+	defer wg.Done()
+
+	var res parseResult
+
+	if start > 0 {
+		for start < end && data[start-1] != '\n' {
+			start++
+		}
+	}
+
+	if end < len(data) {
+		for end < len(data) && data[end-1] != '\n' {
+			end++
+		}
+	}
+
+	i := start
+
+	for i < end {
+		lineStart := i
+
+		for i < end && data[i] != '\n' {
+			i++
+		}
+
+		line := data[lineStart:i]
+		i++
+
+		if len(line) < 10 {
+			continue
+		}
+		res.lineCount++
+
+		quotePos := bytes.LastIndexByte(line, '"')
+
+		if quotePos != -1 {
+			rest := line[quotePos+1:]
+			idx := 0
+
+			for idx < len(rest) && rest[idx] == ' ' {
+				idx++
+			}
+
+			if idx+3 <= len(rest) {
+				code := fastParseInt(rest[idx : idx+3])
+
+				if code < 1000 {
+					res.counts[code]++
+				}
+			}
+		}
+
+	}
+
+	resultChan <- res
+
 }
 
 func main() {
@@ -42,6 +109,9 @@ func main() {
 	}
 
 	fmt.Println("GO-Parser")
+
+	numWorkers := runtime.NumCPU()
+	fmt.Printf("GO-Parser (Stufe 3: Multi-Threading mit %d Core)\n", numWorkers)
 
 	filepath := flag.Arg(0)
 
@@ -72,64 +142,51 @@ func main() {
 	}
 	defer unix.Munmap(data)
 
-	statusCounts := make(map[int]int)
-	var lineCount int64 = 0
-
-	fmt.Println("Starte Go-Parser (Stufe 2: Zero-Copy & mmap)...")
+	fmt.Println("Starte Go-Parser (Stufe 3: Multi-Threading)...")
 	startTime := time.Now()
 
-	i := 0
-	length := len(data)
+	chunckSize := size / numWorkers
+	var wg sync.WaitGroup
+	resultChan := make(chan parseResult, numWorkers)
 
-	for i < length {
-		lineStart := i
-
-		for i < length && data[i] != '\n' {
-			i++
+	for w := 0; w < numWorkers; w++ {
+		start := w * chunckSize
+		end := start + chunckSize
+		if w == numWorkers-1 {
+			end = size
 		}
 
-		line := data[lineStart:i]
-		i++
-		lineCount++
+		wg.Add(1)
+		go processChunck(data, start, end, &wg, resultChan)
+	}
 
-		spaceCount := 0
-		tokenStart := 0
-		foundStatus := false
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
 
-		for j := 0; j < len(line); j++ {
-			if line[j] == ' ' {
-				if spaceCount == 8 {
-					code := fastParseInt(line[tokenStart:j])
+	var totalStatusCounts [1000]int64
+	var totalLineCount int64 = 0
 
-					if code > 0 {
-						statusCounts[code]++
-					}
-
-					foundStatus = true
-					break
-				}
-				spaceCount++
-				tokenStart = j + 1
-			}
-		}
-
-		if !foundStatus && spaceCount == 8 {
-			code := fastParseInt(line[tokenStart:])
-
-			if code > 0 {
-				statusCounts[code]++
-			}
+	for res := range resultChan {
+		totalLineCount += res.lineCount
+		for code := 0; code < 1000; code++ {
+			totalStatusCounts[code] += res.counts[code]
 		}
 	}
 
 	elapsed := time.Since(startTime)
 
 	fmt.Println("\n--- Parsing abgeschlossen ---")
-	fmt.Printf("Verarbeitete Zeilen: %d\n", lineCount)
+	fmt.Printf("Verarbeitete Zeilen: %d\n", totalLineCount)
 	fmt.Printf("Benötigte Zeit: %v\n", elapsed)
 	fmt.Println("Statuscode-Statistik:")
-	for code, count := range statusCounts {
-		fmt.Printf("    HTTP %d: %d\n", code, count)
+	for code, count := range totalStatusCounts {
+
+		if count > 0 {
+			fmt.Printf("    HTTP %d: %d\n", code, count)
+		}
+
 	}
 
 	if *profileFlag {
