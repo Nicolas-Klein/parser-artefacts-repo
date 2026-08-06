@@ -49,27 +49,38 @@ pub fn main() !void {
     var status_counts = [_]u64{0} ** 1000;
     var line_count: u64 = 0;
 
-    // Direct Targeted Search
+    // Zeilen-Iterator über den mmap-Speicher (Stufe 2a)
     var line_iter = std.mem.splitScalar(u8, ptr, '\n');
 
     while (line_iter.next()) |line| {
-        if (line.len < 10) continue;
+        if (line.len == 0) continue;
         line_count += 1;
 
-        // Wir suchen das letzte Anführungszeichen der HTTP-Anforderung ' " '
-        // In Logs: ... "GET /path HTTP/1.1" 200 1234
-        if (std.mem.lastIndexOfScalar(u8, line, '"')) |quote_pos| {
-            const rest = line[quote_pos + 1 ..];
-            // Überspringe führendes Leerzeichen nach dem Anführungszeichen
-            var idx: usize = 0;
-            while (idx < rest.len and rest[idx] == ' ') : (idx += 1) {}
+        // --- Dein Vorwärts-Parsing für das 9. Token (Stufe 2a) ---
+        var space_count: u8 = 0;
+        var token_start: usize = 0;
+        var found_status = false;
 
-            // Der Statuscode ist 3 Stellen lang
-            if (idx + 3 <= rest.len) {
-                const code = fastParseInt(rest[idx .. idx + 3]);
-                if (code < 1000) {
-                    status_counts[code] += 1;
+        var j: usize = 0;
+        while (j < line.len) : (j += 1) {
+            if (line[j] == ' ') {
+                if (space_count == 8) {
+                    const code = fastParseInt(line[token_start..j]);
+                    if (code < 1000) {
+                        status_counts[code] += 1;
+                    }
+                    found_status = true;
+                    break;
                 }
+                space_count += 1;
+                token_start = j + 1;
+            }
+        }
+
+        if (!found_status and space_count == 8) {
+            const code = fastParseInt(line[token_start..]);
+            if (code < 1000) {
+                status_counts[code] += 1;
             }
         }
     }

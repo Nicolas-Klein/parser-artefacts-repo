@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"os"
@@ -93,22 +92,32 @@ func main() {
 		i++
 		lineCount++
 
-		quotePos := bytes.LastIndexByte(line, '"')
-		if quotePos != -1 {
-			rest := line[quotePos+1:]
+		spaceCount := 0
+		tokenStart := 0
+		foundStatus := false
 
-			// Führende Leerzeichen überspringen
-			idx := 0
-			for idx < len(rest) && rest[idx] == ' ' {
-				idx++
-			}
+		for j := 0; j < len(line); j++ {
+			if line[j] == ' ' {
+				if spaceCount == 8 {
+					code := fastParseInt(line[tokenStart:j])
 
-			// Die 3 Stellen des HTTP-Statuscodes parsen
-			if idx+3 <= len(rest) {
-				code := fastParseInt(rest[idx : idx+3])
-				if code < 1000 {
-					statusCounts[code]++
+					if code > 0 {
+						statusCounts[code]++
+					}
+
+					foundStatus = true
+					break
 				}
+				spaceCount++
+				tokenStart = j + 1
+			}
+		}
+
+		if !foundStatus && spaceCount == 8 {
+			code := fastParseInt(line[tokenStart:])
+
+			if code > 0 {
+				statusCounts[code]++
 			}
 		}
 	}
