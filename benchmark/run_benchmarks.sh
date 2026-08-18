@@ -54,13 +54,13 @@ echo "Führe Hyperfine-Messungen durch (10 Durchläufe, 3 Warmups)..."
 hyperfine \
   --warmup 3 \
   --runs 10 \
-  --export-json "$RESULTS_DIR/stage1_results.json" \
-  --export-markdown "$RESULTS_DIR/stage1_results.md" \
+  --export-json "$RESULTS_DIR/stage1_v2_results.json" \
+  --export-markdown "$RESULTS_DIR/stage1_v2_results.md" \
   --command-name "Go-Baseline (Stufe 1)" "$GO_BIN $LOG_FILE" \
   --command-name "Zig-Baseline (Stufe 1)" "$ZIG_BIN $LOG_FILE"
 
 echo ""
 echo "=================================================="
 echo "Benchmark abgeschlossen!"
-echo "Ergebnisse gespeichert in: $RESULTS_DIR/stage1_results.md"
+echo "Ergebnisse gespeichert in: $RESULTS_DIR/stage1_v2_results.md"
 echo "=================================================="
