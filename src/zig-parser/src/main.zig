@@ -10,6 +10,17 @@ pub const LogEntry = struct {
     bytes_sent: u64,
 };
 
+// Allokationsfreies Integer-Parsing für Byte-Slices
+inline fn fastParseInt(b: []const u8) u16 {
+    var n: u16 = 0;
+    for (b) |ch| {
+        if (ch >= '0' and ch <= '9') {
+            n = n * 10 + @as(u16, ch - '0');
+        }
+    }
+    return n;
+}
+
 fn parseLine(line: []const u8) !LogEntry {
     const first_quote = std.mem.indexOfScalar(u8, line, '"') orelse return error.InvalidFormat;
     const last_quote = std.mem.lastIndexOfScalar(u8, line, '"') orelse return error.InvalidFormat;
@@ -20,22 +31,47 @@ fn parseLine(line: []const u8) !LogEntry {
     const request = line[first_quote + 1 .. last_quote];
     const suffix = line[last_quote + 1 ..];
 
-    var prefix_iter = std.mem.tokenizeScalar(u8, prefix, ' ');
-    const remote_host = prefix_iter.next() orelse return error.InvalidFormat;
-    const identity = prefix_iter.next() orelse return error.InvalidFormat;
-    const user = prefix_iter.next() orelse return error.InvalidFormat;
+    // 1. Prefix zerlegen (Host, Identity, User, Timestamp)
+    var idx: usize = 0;
 
-    const timestamp = std.mem.trim(u8, prefix_iter.rest(), " ");
+    // RemoteHost
+    var start = idx;
+    while (idx < prefix.len and prefix[idx] != ' ') : (idx += 1) {}
+    if (idx >= prefix.len) return error.InvalidFormat;
+    const remote_host = prefix[start..idx];
+    idx += 1;
 
-    var suffix_iter = std.mem.tokenizeScalar(u8, suffix, ' ');
-    const status_str = suffix_iter.next() orelse return error.InvalidFormat;
-    const status_code = try std.fmt.parseInt(u16, status_str, 10);
+    // Identity
+    start = idx;
+    while (idx < prefix.len and prefix[idx] != ' ') : (idx += 1) {}
+    if (idx >= prefix.len) return error.InvalidFormat;
+    const identity = prefix[start..idx];
+    idx += 1;
 
+    // User
+    start = idx;
+    while (idx < prefix.len and prefix[idx] != ' ') : (idx += 1) {}
+    if (idx >= prefix.len) return error.InvalidFormat;
+    const user = prefix[start..idx];
+    idx += 1;
+
+    // Timestamp
+    const timestamp = std.mem.trim(u8, prefix[idx..], " ");
+
+    // 2. Suffix zerlegen (Statuscode & BytesSent)
+    idx = 0;
+    while (idx < suffix.len and suffix[idx] == ' ') : (idx += 1) {}
+    start = idx;
+    while (idx < suffix.len and suffix[idx] != ' ') : (idx += 1) {}
+    if (start == idx) return error.InvalidFormat;
+
+    const status_code = fastParseInt(suffix[start..idx]);
+
+    // BytesSent
     var bytes_sent: u64 = 0;
-    if (suffix_iter.next()) |bytes_str| {
-        if (!std.mem.eql(u8, bytes_str, "-")) {
-            bytes_sent = std.fmt.parseInt(u64, bytes_str, 10) catch 0;
-        }
+    while (idx < suffix.len and suffix[idx] == ' ') : (idx += 1) {}
+    if (idx < suffix.len and suffix[idx] != '-') {
+        bytes_sent = fastParseInt(suffix[idx..]);
     }
 
     return LogEntry{
@@ -55,7 +91,11 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // 2. CLI-Argumente in Zig 0.14.0 (Stabil & Sauber)
+    // 2. ArenaAllocator initialisieren (Gegenstück zu Go's sync.Pool)
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    // 3. CLI-Argumente in Zig 0.14.0 (Stabil & Sauber)
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
@@ -67,26 +107,46 @@ pub fn main() !void {
 
     const file_path = args[1];
 
-    std.debug.print("Starte Zig-Parser (Stufe 1: Baseline)...\n", .{});
+    std.debug.print("Starte Zig-Parser (Stufe 2: Speicheroptimierung)...\n", .{});
     const start_time = std.time.nanoTimestamp();
 
-    // 3. Datei öffnen
+    // 4. Datei öffnen
     const file = try std.fs.cwd().openFile(file_path, .{});
     defer file.close();
 
-    // 4. Map für Statuscodes initialisieren
+    const file_size = (try file.stat()).size;
+    if (file_size == 0) return;
+
+    const ptr = try std.posix.mmap(
+        null,
+        file_size,
+        std.posix.PROT.READ,
+        .{ .TYPE = .SHARED },
+        file.handle,
+        0,
+    );
+    defer std.posix.munmap(ptr);
+
+    // 5. Map für Statuscodes initialisieren
     var status_counts = [_]u64{0} ** 1000;
     var line_count: u64 = 0;
     var parse_error_count: u64 = 0;
 
-    var line_buf: [4096]u8 = undefined;
-    var buf_reader = std.io.bufferedReader(file.reader());
-    var reader = buf_reader.reader();
+    // 6. Hauptschleife: Zeilenweise lesen
+    var i: usize = 0;
+    while (i < ptr.len) {
+        const line_start = i;
+        while (i < ptr.len and ptr[i] != '\n') {
+            i += 1;
+        }
 
-    // 5. Hauptschleife: Zeilenweise lesen
-    while (try reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
+        const line = ptr[line_start..i];
+        i += 1; // \n überspringen
+
+        if (line.len == 0) continue;
         line_count += 1;
 
+        // Zero-Copy Parsing
         if (parseLine(line)) |entry| {
             if (entry.status_code < 1000) {
                 status_counts[entry.status_code] += 1;
@@ -94,6 +154,10 @@ pub fn main() !void {
         } else |_| {
             parse_error_count += 1;
         }
+
+        // Arena-Speicher zurücksetzen (behält reservierte Kapazität bei)
+        // Dies entspricht funktional dem Zurücklegen/Resetten des Objekts im sync.Pool
+        _ = arena.reset(.retain_capacity);
     }
 
     const end_time = std.time.nanoTimestamp();
