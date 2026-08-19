@@ -85,6 +85,56 @@ fn parseLine(line: []const u8) !LogEntry {
     };
 }
 
+const ThreadResult = struct {
+    counts: [1000]u64 = [_]u64{0} ** 1000,
+    line_count: u64 = 0,
+    parse_error_count: u64 = 0,
+};
+
+fn processChunk(data: []const u8, start_pos: usize, end_pos: usize, result: *ThreadResult, backing_allocator: std.mem.Allocator) void {
+    var arena = std.heap.ArenaAllocator.init(backing_allocator);
+    defer arena.deinit();
+
+    var start = start_pos;
+    var end = end_pos;
+
+    if (start > 0) {
+        while (start < data.len and data[start - 1] != '\n') {
+            start += 1;
+        }
+    }
+
+    if (end < data.len) {
+        while (end < data.len and data[end - 1] != '\n') {
+            end += 1;
+        }
+    }
+
+    var i = start;
+    while (i < end) {
+        const line_start = i;
+        while (i < end and data[i] != '\n') {
+            i += 1;
+        }
+
+        const line = data[line_start..i];
+        i += 1;
+
+        if (line.len == 0) continue;
+
+        if (parseLine(line)) |entry| {
+            if (entry.status_code < 1000) {
+                result.counts[entry.status_code] += 1;
+                result.line_count += 1;
+            }
+        } else |_| {
+            result.parse_error_count += 1;
+        }
+
+        _ = arena.reset(.retain_capacity);
+    }
+}
+
 pub fn main() !void {
     // 1. GeneralPurposeAllocator (Baseline Stufe 1)
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -107,7 +157,8 @@ pub fn main() !void {
 
     const file_path = args[1];
 
-    std.debug.print("Starte Zig-Parser (Stufe 2: Speicheroptimierung)...\n", .{});
+    const cpu_count = std.Thread.getCpuCount() catch 1;
+    std.debug.print("Starte Zig-Parser (Stufe 3: Multi-Threading mit {d} Cores - Full Struct)...\n", .{cpu_count});
     const start_time = std.time.nanoTimestamp();
 
     // 4. Datei öffnen
@@ -127,37 +178,42 @@ pub fn main() !void {
     );
     defer std.posix.munmap(ptr);
 
-    // 5. Map für Statuscodes initialisieren
-    var status_counts = [_]u64{0} ** 1000;
-    var line_count: u64 = 0;
-    var parse_error_count: u64 = 0;
+    const threads = try allocator.alloc(std.Thread, cpu_count);
+    defer allocator.free(threads);
 
-    // 6. Hauptschleife: Zeilenweise lesen
-    var i: usize = 0;
-    while (i < ptr.len) {
-        const line_start = i;
-        while (i < ptr.len and ptr[i] != '\n') {
-            i += 1;
+    const results = try allocator.alloc(ThreadResult, cpu_count);
+    defer allocator.free(results);
+
+    for (results) |*res| {
+        res.* = ThreadResult{};
+    }
+
+    const chunk_size = file_size / cpu_count;
+
+    for (0..cpu_count) |w| {
+        const start = w * chunk_size;
+        var end = start + chunk_size;
+        if (w == cpu_count - 1) {
+            end = file_size;
         }
 
-        const line = ptr[line_start..i];
-        i += 1; // \n überspringen
+        threads[w] = try std.Thread.spawn(.{}, processChunk, .{ ptr, start, end, &results[w], allocator });
+    }
 
-        if (line.len == 0) continue;
-        line_count += 1;
+    for (threads) |thread| {
+        thread.join();
+    }
 
-        // Zero-Copy Parsing
-        if (parseLine(line)) |entry| {
-            if (entry.status_code < 1000) {
-                status_counts[entry.status_code] += 1;
-            }
-        } else |_| {
-            parse_error_count += 1;
+    var total_status_counts = [_]u64{0} ** 1000;
+    var total_line_count: u64 = 0;
+    var total_error_count: u64 = 0;
+
+    for (results) |res| {
+        total_line_count += res.line_count;
+        total_error_count += res.parse_error_count;
+        for (res.counts, 0..) |count, code| {
+            total_status_counts[code] += count;
         }
-
-        // Arena-Speicher zurücksetzen (behält reservierte Kapazität bei)
-        // Dies entspricht funktional dem Zurücklegen/Resetten des Objekts im sync.Pool
-        _ = arena.reset(.retain_capacity);
     }
 
     const end_time = std.time.nanoTimestamp();
@@ -165,11 +221,11 @@ pub fn main() !void {
 
     // 6. Ergebnisse ausgeben
     std.debug.print("\n--- Parsing abgeschlossen ---\n", .{});
-    std.debug.print("Verarbeitete Zeilen: {d} (Fehlerhaft: {d})\n", .{ line_count, parse_error_count });
+    std.debug.print("Verarbeitete Zeilen: {d} (Fehlerhaft: {d})\n", .{ total_line_count, total_error_count });
     std.debug.print("Benötigte Zeit:      {d} ms\n", .{elapsed_ms});
     std.debug.print("Statuscode-Statistik:\n", .{});
 
-    for (status_counts, 0..) |count, code| {
+    for (total_status_counts, 0..) |count, code| {
         if (count > 0) {
             std.debug.print("   HTTP {d}: {d}\n", .{ code, count });
         }

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"sync"
 	"time"
@@ -133,6 +134,62 @@ func parseLine(line []byte, entry *LogEntry) error {
 	return nil
 }
 
+type parseResult struct {
+	counts          [1000]int64
+	lineCount       int64
+	parseErrorCount int64
+}
+
+func processChunk(data []byte, start, end int, wg *sync.WaitGroup, resultChan chan<- parseResult) {
+	defer wg.Done()
+
+	var res parseResult
+
+	if start > 0 {
+		for start < end && data[start-1] != '\n' {
+			start++
+		}
+	}
+
+	if end < len(data) {
+		for end < len(data) && data[end-1] != '\n' {
+			end++
+		}
+	}
+
+	i := start
+	for i < end {
+		lineStart := i
+		for i < end && data[i] != '\n' {
+			i++
+		}
+
+		line := data[lineStart:i]
+		i++
+
+		if len(line) == 0 {
+			continue
+		}
+		res.lineCount++
+
+		entry := entryPool.Get().(*LogEntry)
+		err := parseLine(line, entry)
+
+		if err != nil {
+			res.parseErrorCount++
+		} else {
+			if entry.Statuscode < 1000 {
+				res.counts[entry.Statuscode]++
+			}
+		}
+
+		entry.Reset()
+		entryPool.Put(entry)
+	}
+
+	resultChan <- res
+}
+
 func main() {
 	profileFlag := flag.Bool("profile", false, "Aktiviert CPU- und Memory-Profiling")
 
@@ -153,6 +210,10 @@ func main() {
 	}
 
 	fmt.Println("GO-Parser")
+
+	numWorkers := runtime.NumCPU()
+	fmt.Printf("GO-Parser (Stufe 3: Multi-Threading mit %d Cores - Full Struct)\n", numWorkers)
+	startTime := time.Now()
 
 	filepath := flag.Arg(0)
 
@@ -183,53 +244,48 @@ func main() {
 	}
 	defer unix.Munmap(data)
 
-	statusCounts := make(map[int]int)
-	var lineCount int64 = 0
-	var parseErrorCount int64 = 0
+	chunkSize := size / numWorkers
+	var wg sync.WaitGroup
+	resultChan := make(chan parseResult, numWorkers)
 
-	fmt.Println("Starte Go-Parser (Stufe 2: Speicheroptimierung)...")
-	startTime := time.Now()
-
-	i := 0
-	for i < len(data) {
-		lineStart := i
-		for i < len(data) && data[i] != '\n' {
-			i++
+	for w := 0; w < numWorkers; w++ {
+		start := w * chunkSize
+		end := start + chunkSize
+		if w == numWorkers-1 {
+			end = size
 		}
 
-		line := data[lineStart:i]
-		i++ // \n überspringen
+		wg.Add(1)
+		go processChunk(data, start, end, &wg, resultChan)
+	}
 
-		if len(line) == 0 {
-			continue
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	var totalStatusCounts [1000]int64
+	var totalLineCount int64 = 0
+	var totalErrorCount int64 = 0
+
+	for res := range resultChan {
+		totalLineCount += res.lineCount
+		totalErrorCount += res.parseErrorCount
+		for code := 0; code < 1000; code++ {
+			totalStatusCounts[code] += res.counts[code]
 		}
-		lineCount++
-
-		// 3. sync.Pool Objekt leihen
-		entry := entryPool.Get().(*LogEntry)
-
-		err := parseLine(line, entry)
-		if err != nil {
-			parseErrorCount++
-		} else {
-			if entry.Statuscode < 1000 {
-				statusCounts[entry.Statuscode]++
-			}
-		}
-
-		// Objekt säubern und zurück in den Pool geben
-		entry.Reset()
-		entryPool.Put(entry)
 	}
 
 	elapsed := time.Since(startTime)
 
 	fmt.Println("\n--- Parsing abgeschlossen ---")
-	fmt.Printf("Verarbeitete Zeilen: %d (Fehlerhaft: %d)\n", lineCount, parseErrorCount)
-	fmt.Printf("Benötigte Zeit: %v\n", elapsed)
+	fmt.Printf("Verarbeitete Zeilen: %d (Fehlerhaft: %d)\n", totalLineCount, totalErrorCount)
+	fmt.Printf("Benötigte Zeit:      %v\n", elapsed)
 	fmt.Println("Statuscode-Statistik:")
-	for code, count := range statusCounts {
-		fmt.Printf("    HTTP %d: %d\n", code, count)
+	for code, count := range totalStatusCounts {
+		if count > 0 {
+			fmt.Printf("    HTTP %d: %d\n", code, count)
+		}
 	}
 
 	if *profileFlag {
