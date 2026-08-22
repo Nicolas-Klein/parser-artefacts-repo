@@ -91,10 +91,7 @@ const ThreadResult = struct {
     parse_error_count: u64 = 0,
 };
 
-fn processChunk(data: []const u8, start_pos: usize, end_pos: usize, result: *ThreadResult, backing_allocator: std.mem.Allocator) void {
-    var arena = std.heap.ArenaAllocator.init(backing_allocator);
-    defer arena.deinit();
-
+fn processChunk(data: []const u8, start_pos: usize, end_pos: usize, result: *ThreadResult) void {
     var start = start_pos;
     var end = end_pos;
 
@@ -130,8 +127,6 @@ fn processChunk(data: []const u8, start_pos: usize, end_pos: usize, result: *Thr
         } else |_| {
             result.parse_error_count += 1;
         }
-
-        _ = arena.reset(.retain_capacity);
     }
 }
 
@@ -145,9 +140,10 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
+    const arena_allocator = arena.allocator();
+
     // 3. CLI-Argumente in Zig 0.14.0 (Stabil & Sauber)
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    const args = try std.process.argsAlloc(arena_allocator);
 
     if (args.len < 2) {
         std.debug.print("Fehler: Bitte gib den Pfad zur Log-Datei an.\n", .{});
@@ -178,11 +174,9 @@ pub fn main() !void {
     );
     defer std.posix.munmap(ptr);
 
-    const threads = try allocator.alloc(std.Thread, cpu_count);
-    defer allocator.free(threads);
+    const threads = try arena_allocator.alloc(std.Thread, cpu_count);
 
-    const results = try allocator.alloc(ThreadResult, cpu_count);
-    defer allocator.free(results);
+    const results = try arena_allocator.alloc(ThreadResult, cpu_count);
 
     for (results) |*res| {
         res.* = ThreadResult{};
@@ -197,7 +191,7 @@ pub fn main() !void {
             end = file_size;
         }
 
-        threads[w] = try std.Thread.spawn(.{}, processChunk, .{ ptr, start, end, &results[w], allocator });
+        threads[w] = try std.Thread.spawn(.{}, processChunk, .{ ptr, start, end, &results[w] });
     }
 
     for (threads) |thread| {
