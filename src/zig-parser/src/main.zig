@@ -97,8 +97,6 @@ pub fn main() !void {
         } else |_| {
             parse_error_count += 1;
         }
-
-        _ = line_arena.reset(.retain_capacity);
     }
 
     const end_time = std.time.nanoTimestamp();
