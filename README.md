@@ -8,8 +8,8 @@ Im Rahmen eines Design Science Research (DSR) Ansatzes werden zwei Log-Parser (i
 ## 📁 Projektstruktur
 
 * `generator/` - Python-Skript zur Generierung der Test-Log-Datei (5 GB).
-* `src/go-parser/` - Implementierung des Parsers in Go (inkl. Ausbaustufen).
-* `src/zig-parser/` - Implementierung des Parsers in Zig (inkl. Ausbaustufen).
+* `src/go-parser/` - Implementierung des Parsers in Go.
+* `src/zig-parser/` - Implementierung des Parsers in Zig.
 
 ## 🛠 Voraussetzungen
 
