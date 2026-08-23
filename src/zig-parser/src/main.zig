@@ -10,22 +10,21 @@ pub const LogEntry = struct {
     bytes_sent: u64,
 };
 
-fn parseLine(line: []const u8) !LogEntry {
+fn parseLine(line: []const u8, allocator: std.mem.Allocator) !LogEntry {
     const first_quote = std.mem.indexOfScalar(u8, line, '"') orelse return error.InvalidFormat;
     const last_quote = std.mem.lastIndexOfScalar(u8, line, '"') orelse return error.InvalidFormat;
 
     if (first_quote >= last_quote) return error.InvalidFormat;
 
     const prefix = line[0..first_quote];
-    const request = line[first_quote + 1 .. last_quote];
+    const request_slice = line[first_quote + 1 .. last_quote];
     const suffix = line[last_quote + 1 ..];
 
     var prefix_iter = std.mem.tokenizeScalar(u8, prefix, ' ');
-    const remote_host = prefix_iter.next() orelse return error.InvalidFormat;
-    const identity = prefix_iter.next() orelse return error.InvalidFormat;
-    const user = prefix_iter.next() orelse return error.InvalidFormat;
-
-    const timestamp = std.mem.trim(u8, prefix_iter.rest(), " ");
+    const host_slice = prefix_iter.next() orelse return error.InvalidFormat;
+    const id_slice = prefix_iter.next() orelse return error.InvalidFormat;
+    const user_slice = prefix_iter.next() orelse return error.InvalidFormat;
+    const ts_slice = std.mem.trim(u8, prefix_iter.rest(), " ");
 
     var suffix_iter = std.mem.tokenizeScalar(u8, suffix, ' ');
     const status_str = suffix_iter.next() orelse return error.InvalidFormat;
@@ -39,11 +38,11 @@ fn parseLine(line: []const u8) !LogEntry {
     }
 
     return LogEntry{
-        .remote_host = remote_host,
-        .identity = identity,
-        .user = user,
-        .timestamp = timestamp,
-        .request = request,
+        .remote_host = try allocator.dupe(u8, host_slice),
+        .identity = try allocator.dupe(u8, id_slice),
+        .user = try allocator.dupe(u8, user_slice),
+        .timestamp = try allocator.dupe(u8, ts_slice),
+        .request = try allocator.dupe(u8, request_slice),
         .status_code = status_code,
         .bytes_sent = bytes_sent,
     };
@@ -54,6 +53,10 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    var line_arena = std.heap.ArenaAllocator.init(allocator);
+    defer line_arena.deinit();
+    const arena_allocator = line_arena.allocator();
 
     // 2. CLI-Argumente in Zig 0.14.0 (Stabil & Sauber)
     const args = try std.process.argsAlloc(allocator);
@@ -87,13 +90,15 @@ pub fn main() !void {
     while (try reader.readUntilDelimiterOrEof(&line_buf, '\n')) |line| {
         line_count += 1;
 
-        if (parseLine(line)) |entry| {
+        if (parseLine(line, arena_allocator)) |entry| {
             if (entry.status_code < 1000) {
                 status_counts[entry.status_code] += 1;
             }
         } else |_| {
             parse_error_count += 1;
         }
+
+        _ = line_arena.reset(.retain_capacity);
     }
 
     const end_time = std.time.nanoTimestamp();
