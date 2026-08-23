@@ -38,8 +38,8 @@ git stash push -m "Automated master benchmark temporary stash" > /dev/null 2>&1 
 # Funktion zur Wiederherstellung des Git-Zustands bei Abbruch/Erfolg
 cleanup() {
     echo ""
-    echo "Kehre zum ursprünglichen Branch zurück: $ORIGINAL_BRANCH"
-    git checkout "$ORIGINAL_BRANCH" > /dev/null 2>&1 || true
+    echo "Kehre zum ursprünglichen Stand zurück..."
+    git checkout --force "$ORIGINAL_BRANCH" > /dev/null 2>&1 || true
     git stash pop > /dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -62,7 +62,7 @@ for TAG in "${TAGS[@]}"; do
     echo "--------------------------------------------------"
 
     # 1. Auschecken
-    git checkout "$TAG" --quiet
+    git checkout --force "$TAG" --quiet
 
     # 2. Bauen (Go & Zig)
     echo "Kompiliere Go-Parser..."
