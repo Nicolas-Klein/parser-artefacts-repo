@@ -33,7 +33,7 @@ func (e *LogEntry) Reset() {
 	e.BytesSent = 0
 }
 
-// Globaler sync.Pool zur Reduktion von Heap-Allokationen und GC-Druck
+// Globaler sync.Pool zur Reduktion von Heap-Allokationen
 var entryPool = sync.Pool{
 	New: func() any {
 		return &LogEntry{}
