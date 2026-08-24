@@ -22,43 +22,74 @@ type LogEntry struct {
 }
 
 func parseLine(line string) (LogEntry, error) {
-	firstQuote := strings.IndexByte(line, '"')
-	lastQuote := strings.LastIndexByte(line, '"')
+	// 1. Naives Zerlegen der gesamten Zeile an jedem Leerzeichen
+	parts := strings.Split(line, " ")
+	if len(parts) < 9 {
+		return LogEntry{}, fmt.Errorf("ungültiges Log-Format: zu wenige Tokens")
+	}
 
-	if firstQuote == -1 || lastQuote == -1 || firstQuote >= lastQuote {
+	// 2. RemoteHost, Identity und User aus den ersten drei Tokens auslesen
+	remoteHost := parts[0]
+	identity := parts[1]
+	user := parts[2]
+
+	// 3. Timestamp suchen: Tokens zwischen '[' und ']' wieder zusammenfügen
+	startTS := -1
+	endTS := -1
+	for i := 3; i < len(parts); i++ {
+		if startTS == -1 && strings.HasPrefix(parts[i], "[") {
+			startTS = i
+		}
+		if startTS != -1 && strings.HasSuffix(parts[i], "]") {
+			endTS = i
+			break
+		}
+	}
+	if startTS == -1 || endTS == -1 {
+		return LogEntry{}, fmt.Errorf("ungültiges Timestamp-Format")
+	}
+	timestamp := strings.Join(parts[startTS:endTS+1], " ")
+
+	// 4. Request suchen: Tokens zwischen den ersten und letzten Anführungszeichen zusammenfügen
+	startReq := -1
+	endReq := -1
+	for i := endTS + 1; i < len(parts); i++ {
+		if startReq == -1 && strings.HasPrefix(parts[i], "\"") {
+			startReq = i
+		}
+		if startReq != -1 && strings.HasSuffix(parts[i], "\"") {
+			endReq = i
+			break
+		}
+	}
+	if startReq == -1 || endReq == -1 {
 		return LogEntry{}, fmt.Errorf("ungültiges Request-Format")
 	}
 
-	prefix := line[:firstQuote]
-	request := line[firstQuote+1 : lastQuote]
-	suffix := line[lastQuote+1:]
+	// Anführungszeichen am Anfang und Ende des gefügten Strings entfernen
+	rawRequest := strings.Join(parts[startReq:endReq+1], " ")
+	request := strings.Trim(rawRequest, "\"")
 
-	prefixParts := strings.Fields(prefix)
-	if len(prefixParts) < 4 {
-		return LogEntry{}, fmt.Errorf("ungültiges Prefix-Format")
-	}
-
-	timestamp := strings.Join(prefixParts[3:], " ")
-
-	suffixParts := strings.Fields(suffix)
-	if len(suffixParts) < 1 {
+	// 5. Suffix (Statuscode & BytesSent) aus den Tokens nach dem Request lesen
+	suffixIdx := endReq + 1
+	if suffixIdx >= len(parts) {
 		return LogEntry{}, fmt.Errorf("ungültiges Suffix-Format")
 	}
 
-	statusCode, err := strconv.Atoi(suffixParts[0])
+	statusCode, err := strconv.Atoi(parts[suffixIdx])
 	if err != nil {
 		return LogEntry{}, fmt.Errorf("ungültiger Statuscode")
 	}
 
 	var bytesSent int64 = 0
-	if len(suffixParts) >= 2 && suffixParts[1] != "-" {
-		bytesSent, _ = strconv.ParseInt(suffixParts[1], 10, 64)
+	if suffixIdx+1 < len(parts) && parts[suffixIdx+1] != "-" {
+		bytesSent, _ = strconv.ParseInt(parts[suffixIdx+1], 10, 64)
 	}
 
 	return LogEntry{
-		RemoteHost: prefixParts[0],
-		Identity:   prefixParts[1],
-		User:       prefixParts[2],
+		RemoteHost: remoteHost,
+		Identity:   identity,
+		User:       user,
 		Timestamp:  timestamp,
 		Request:    request,
 		Statuscode: statusCode,
