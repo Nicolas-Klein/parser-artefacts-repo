@@ -6,7 +6,7 @@ $LogFile = "$ProjectRoot\generator\benchmark_large.log"
 $ResultsDir = "$ScriptDir\results"
 $SummaryFile = "$ResultsDir\master_summary.md"
 
-$Tags = @("v2.0-struct-stage1", "v2.1-struct-stage2a", "v2.2-struct-stage3")
+$Tags = @("new-stage1-windows", "new-stage2-windows", "new-stage3-windows")
 
 New-Item -ItemType Directory -Force -Path $ResultsDir | Out-Null
 
