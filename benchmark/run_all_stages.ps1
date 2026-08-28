@@ -31,7 +31,7 @@ try {
 
         Write-Host "Kompiliere Zig-Parser..."
         Set-Location "$ProjectRoot\src\zig-parser"
-        zig build-exe main.zig -O ReleaseFast -femit-bin=zig-parser-artefact.exe
+        zig build-exe src/main.zig -O ReleaseFast --name zig-parser-artefact
 
         $GoBin = "$ProjectRoot\src\go-parser\go-parser-artefact.exe"
         $ZigBin = "$ProjectRoot\src\zig-parser\zig-parser-artefact.exe"
