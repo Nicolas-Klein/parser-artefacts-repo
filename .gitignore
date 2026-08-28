@@ -25,7 +25,9 @@ data/
 /src/zig-parser/src/root.zig
 /src/zig-parser/zig-parser-artefact.o
 /src/zig-parser/zig-parser-artefact
-
+/src/zig-parser/zig-parser-artefact.exe.obj
+/src/zig-parser/zig-parser-artefact.obj
+/src/zig-parser/zig-parser-artefact.pdb
 
 # ------------------------------------------------------------------------------
 # Python (Generator)
@@ -47,3 +49,5 @@ commands
 ,
 results.md
 benchmark/results/master_summary.md
+benchmark/results/current_summary.md
+benchmark/results/current_results.json

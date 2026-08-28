@@ -7,10 +7,42 @@ import (
 	"os"
 	"runtime/pprof"
 	"sync"
+	"syscall"
 	"time"
-
-	"golang.org/x/sys/unix"
+	"unsafe"
 )
+
+// === WINDOWS MMAP IMPLEMENTIERUNG ===
+func mmapFileWindows(f *os.File, size int) ([]byte, error) {
+	// CreateFileMapping
+	h, err := syscall.CreateFileMapping(syscall.Handle(f.Fd()), nil, syscall.PAGE_READONLY, 0, 0, nil)
+	if err != nil {
+		return nil, fmt.Errorf("CreateFileMapping failed: %v", err)
+	}
+	// Wichtig: Handle nach dem Mapping schließen
+	defer syscall.CloseHandle(h)
+
+	// MapViewOfFile
+	addr, err := syscall.MapViewOfFile(h, syscall.FILE_MAP_READ, 0, 0, 0)
+	if err != nil {
+		return nil, fmt.Errorf("MapViewOfFile failed: %v", err)
+	}
+
+	// Byte-Slice aus Pointer rekonstruieren
+	// unsafe.Slice ist der moderne Go-Weg (ab Go 1.17)
+	var data []byte
+	sliceHeader := (*[1 << 30]byte)(unsafe.Pointer(addr))
+	data = sliceHeader[:size:size]
+
+	return data, nil
+}
+
+func munmapWindows(data []byte) error {
+	addr := uintptr(unsafe.Pointer(&data[0]))
+	return syscall.UnmapViewOfFile(addr)
+}
+
+// ====================================
 
 type LogEntry struct {
 	RemoteHost []byte
@@ -176,12 +208,12 @@ func main() {
 	}
 
 	// 1. mmap anwenden
-	data, err := unix.Mmap(int(file.Fd()), 0, size, unix.PROT_READ, unix.MAP_SHARED)
+	data, err := mmapFileWindows(file, size)
 	if err != nil {
 		fmt.Printf("Fehler bei mmap: %v\n", err)
 		os.Exit(1)
 	}
-	defer unix.Munmap(data)
+	defer munmapWindows(data)
 
 	statusCounts := make(map[int]int)
 	var lineCount int64 = 0
