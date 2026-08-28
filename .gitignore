@@ -25,6 +25,9 @@ data/
 /src/zig-parser/src/root.zig
 /src/zig-parser/zig-parser-artefact.o
 /src/zig-parser/zig-parser-artefact
+/src/zig-parser/zig-parser-artefact.obj
+/src/zig-parser/zig-parser-artefact.pdb
+/src/zig-parser/zig-parser-artefact.exe.obj
 
 
 # ------------------------------------------------------------------------------
@@ -46,3 +49,5 @@ old/
 commands
 ,
 results.md
+benchmark/results/current_results.json
+benchmark/results/current_summary.md

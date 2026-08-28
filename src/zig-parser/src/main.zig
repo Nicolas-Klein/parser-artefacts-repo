@@ -1,4 +1,40 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
+// ============================================================================
+// Win32 C-API BINDINGS
+// ============================================================================
+const WINAPI = std.os.windows.WINAPI;
+const HANDLE = std.os.windows.HANDLE;
+const LPVOID = std.os.windows.LPVOID;
+const DWORD = std.os.windows.DWORD;
+const BOOL = std.os.windows.BOOL;
+const SIZE_T = usize;
+
+extern "kernel32" fn CreateFileMappingA(
+    hFile: HANDLE,
+    lpFileMappingAttributes: ?*anyopaque,
+    flProtect: DWORD,
+    dwMaximumSizeHigh: DWORD,
+    dwMaximumSizeLow: DWORD,
+    lpName: ?[*:0]const u8,
+) callconv(WINAPI) ?HANDLE;
+
+extern "kernel32" fn MapViewOfFile(
+    hFileMappingObject: HANDLE,
+    dwDesiredAccess: DWORD,
+    dwFileOffsetHigh: DWORD,
+    dwFileOffsetLow: DWORD,
+    dwNumberOfBytesToMap: SIZE_T,
+) callconv(WINAPI) ?LPVOID;
+
+extern "kernel32" fn UnmapViewOfFile(
+    lpBaseAddress: LPVOID,
+) callconv(WINAPI) BOOL;
+
+extern "kernel32" fn CloseHandle(
+    hObject: HANDLE,
+) callconv(WINAPI) BOOL;
 
 inline fn fastParseInt(b: []const u8) u16 {
     var n: u16 = 0;
@@ -97,8 +133,50 @@ pub fn main() !void {
 
     // Memmory Mapping (mmap)
 
-    const ptr = try std.posix.mmap(null, file_size, std.posix.PROT.READ, .{ .TYPE = .SHARED }, file.handle, 0);
-    defer std.posix.munmap(ptr);
+    var ptr: []const u8 = undefined;
+
+    if (builtin.os.tag == .windows) {
+        const PAGE_READONLY: DWORD = 0x02;
+        const FILE_MAP_READ: DWORD = 0x04;
+
+        const handle = CreateFileMappingA(
+            file.handle,
+            null,
+            PAGE_READONLY,
+            0,
+            0,
+            null,
+        ) orelse return error.CreateFileMappingFailed;
+        defer _ = CloseHandle(handle);
+
+        const mapped_ptr = MapViewOfFile(
+            handle,
+            FILE_MAP_READ,
+            0,
+            0,
+            file_size,
+        ) orelse return error.MapViewOfFileFailed;
+
+        const bytes_ptr: [*]const u8 = @ptrCast(mapped_ptr);
+        ptr = bytes_ptr[0..file_size];
+    } else {
+        ptr = try std.posix.mmap(
+            null,
+            file_size,
+            std.posix.PROT.READ,
+            .{ .TYPE = .SHARED },
+            file.handle,
+            0,
+        );
+    }
+
+    defer {
+        if (builtin.os.tag == .windows) {
+            _ = UnmapViewOfFile(@constCast(@ptrCast(ptr.ptr)));
+        } else {
+            std.posix.munmap(ptr);
+        }
+    }
 
     const threads = try allocator.alloc(std.Thread, cpu_count);
     defer allocator.free(threads);
