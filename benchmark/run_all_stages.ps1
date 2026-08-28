@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Resolve-Path "$ScriptDir\.."
-$LogFile = "$ProjectRoot\generator\benchmark_large.log"
+$LogFile = "$ProjectRoot\benchmark_large.log"
 $ResultsDir = "$ScriptDir\results"
 $SummaryFile = "$ResultsDir\master_summary.md"
 

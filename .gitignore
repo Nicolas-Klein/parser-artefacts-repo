@@ -51,3 +51,6 @@ commands
 results.md
 benchmark/results/current_results.json
 benchmark/results/current_summary.md
+benchmark/results/results_new-stage1-windows.json
+benchmark/results/results_new-stage2-windows.json
+benchmark/results/results_new-stage3-windows.json
