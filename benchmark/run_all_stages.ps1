@@ -4,7 +4,7 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Resolve-Path "$ScriptDir\.."
 $LogFile = "$ProjectRoot\benchmark_large.log"
 $ResultsDir = "$ScriptDir\results"
-$SummaryFile = "$ResultsDir\master_summary.md"
+$SummaryFile = "$ResultsDir\master_summary-windows.md"
 
 $Tags = @("new-stage1-windows", "new-stage2-windows", "new-stage3-windows")
 
@@ -39,6 +39,31 @@ try {
 
         # Hyperfine ausführen
         hyperfine --warmup 3 --runs 10 --export-json "$JsonOut" --command-name "Go ($Tag)" "$GoBin $LogFile" --command-name "Zig ($Tag)" "$ZigBin $LogFile"
+        
+        # 2. JSON-Ergebnisse der aktuellen Stufe an master_summary.md anhängen
+        $PyScript = @"
+import sys, json
+
+json_file = r'$JsonOut'
+tag = r'$Tag'
+summary_file = r'$SummaryFile'
+
+with open(json_file) as f:
+    data = json.load(f)
+
+lines = []
+for res in data['results']:
+    name = res['command']
+    mean_ms = res['mean'] * 1000
+    std_ms = res['stddev'] * 1000
+    min_ms = res['min'] * 1000
+    max_ms = res['max'] * 1000
+    lines.append(f"| {tag} | {name} | {mean_ms:.1f} | {std_ms:.1f} | {min_ms:.1f} | {max_ms:.1f} |\n")
+
+with open(summary_file, 'a', encoding='utf-8') as f:
+    f.writelines(lines)
+"@
+        python -c "$PyScript"
     }
 }
 finally {
@@ -47,3 +72,8 @@ finally {
     git checkout --force $OriginalBranch | Out-Null
     git stash pop | Out-Null
 }
+
+Write-Host "`n==================================================" -ForegroundColor Cyan
+Write-Host " MASTER-BENCHMARK ERFOLGREICH ABGESCHLOSSEN!" -ForegroundColor Cyan
+Write-Host " Alle Ergebnisse wurden in $SummaryFile zusammengeführt." -ForegroundColor Green
+Write-Host "==================================================" -ForegroundColor Cyan
