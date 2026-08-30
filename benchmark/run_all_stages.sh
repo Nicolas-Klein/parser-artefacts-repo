@@ -19,7 +19,7 @@ TAGS=("new-stage1" "new-stage2" "new-stage3")
 mkdir -p "$RESULTS_DIR"
 
 # Tool-Abhängigkeiten prüfen
-for cmd in hyperfine python3 perf /usr/bin/time pidstat; do
+for cmd in hyperfine python3 /usr/bin/time; do
     if ! command -v "$cmd" &> /dev/null && [ ! -x "$cmd" ]; then
         echo "Fehler: '$cmd' ist nicht installiert oder nicht im PATH."
         exit 1
@@ -49,12 +49,15 @@ cleanup() {
     echo -e "\n<br>\n" >> "$SUMMARY_FILE"
     cat "$SUMMARY_SYS" >> "$SUMMARY_FILE"
     
+    # Aufräumen der temporären Dateien
+    rm -f "$SUMMARY_TIME" "$SUMMARY_SYS"
+    
     git checkout "$ORIGINAL_BRANCH" > /dev/null 2>&1 || true
     git stash pop > /dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-# Zusammenfassende Dateien initialisieren
+# 1. Zusammenfassende Dateien mit den KORREKTEN Tabellenköpfen initialisieren
 cat <<EOF > "$SUMMARY_TIME"
 # 1. Gesamtauswertung: Laufzeit (Go vs. Zig)
 Gemessen mit \`hyperfine\` (10 Durchläufe, 3 Warmups).
@@ -64,11 +67,11 @@ Gemessen mit \`hyperfine\` (10 Durchläufe, 3 Warmups).
 EOF
 
 cat <<EOF > "$SUMMARY_SYS"
-# 2. System- & Hardware-Metriken
-Gemessen mit \`time -v\` und \`perf stat\`.
+# 2. System- & Prozess-Metriken (Linux)
+Gemessen via \`/usr/bin/time -v\`.
 
-| Stufe / Tag | Sprache | Max RAM (MB) | Context Switches (Vol / Invol) | CPU Cycles | Instructions | Cache Misses |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| Stufe / Tag | Sprache | Max RAM (MB) | User CPU Time (ms) | Kernel/System CPU Time (ms) | Total CPU Time (ms) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
 EOF
 
 # Hilfsfunktion für Systemmetriken
@@ -76,42 +79,46 @@ measure_sys_metrics() {
     local LANG_NAME=$1
     local BIN_PATH=$2
     local TAG_NAME=$3
-    local BIN_NAME=$(basename "$BIN_PATH")
 
-    echo "  > Erfasse Metriken (time, perf, pidstat) für $LANG_NAME..."
+    echo "  > Erfasse Prozess-Metriken (User/Kernel CPU Time & RAM) für $LANG_NAME..."
 
     local TMP_TIME="$RESULTS_DIR/time_${LANG_NAME}_${TAG_NAME}.txt"
-    local TMP_PERF="$RESULTS_DIR/perf_${LANG_NAME}_${TAG_NAME}.txt"
-    local TMP_PID="$RESULTS_DIR/pidstat_${LANG_NAME}_${TAG_NAME}.txt"
 
-    # A) pidstat (Startet im Hintergrund, loggt jede Sekunde)
-    pidstat -r -u -C "$BIN_NAME" 1 > "$TMP_PID" 2>/dev/null &
-    local PIDSTAT_PID=$!
-
-    # B) GNU time (Max RAM & Context Switches)
+    # GNU time Ausführung (-v schreibt auf stderr)
     /usr/bin/time -v "$BIN_PATH" "$LOG_FILE" > /dev/null 2> "$TMP_TIME"
     
-    # C) perf stat (Hardware Counters)
-    perf stat -e cycles,instructions,cache-misses "$BIN_PATH" "$LOG_FILE" > /dev/null 2> "$TMP_PERF"
+    # Python-Script liest GNU time aus und hängt die Zeile an SUMMARY_SYS an
+    python3 - "$TMP_TIME" "$TAG_NAME" "$LANG_NAME" "$SUMMARY_SYS" <<'END'
+import sys
 
-    # pidstat stoppen
-    kill -9 $PIDSTAT_PID 2>/dev/null || true
+time_file = sys.argv[1]
+tag = sys.argv[2]
+lang = sys.argv[3]
+summary_sys = sys.argv[4]
 
-    # --- DATEN EXTRAHIEREN ---
-    
-    # RAM & Context Switches
-    local MAX_RAM_KB=$(grep "Maximum resident set size" "$TMP_TIME" | awk -F': ' '{print $2}' || echo "0")
-    local MAX_RAM_MB=$(awk "BEGIN {printf \"%.2f\", $MAX_RAM_KB / 1024}")
-    local CS_VOL=$(grep "Voluntary context switches" "$TMP_TIME" | awk -F': ' '{print $2}' || echo "0")
-    local CS_INVOL=$(grep "Involuntary context switches" "$TMP_TIME" | awk -F': ' '{print $2}' || echo "0")
+user_sec = 0.0
+sys_sec = 0.0
+max_ram_kb = 0.0
 
-    # Hardware Counters (tr entfernt Tausendertrennzeichen)
-    local CYCLES=$(grep "cycles" "$TMP_PERF" | awk '{print $1}' | tr -d '.,' || echo "N/A")
-    local INSTR=$(grep "instructions" "$TMP_PERF" | awk '{print $1}' | tr -d '.,' || echo "N/A")
-    local MISSES=$(grep "cache-misses" "$TMP_PERF" | awk '{print $1}' | tr -d '.,' || echo "N/A")
+with open(time_file) as f:
+    for line in f:
+        if "User time (seconds):" in line:
+            user_sec = float(line.split(":")[-1].strip())
+        elif "System time (seconds):" in line:
+            sys_sec = float(line.split(":")[-1].strip())
+        elif "Maximum resident set size" in line:
+            max_ram_kb = float(line.split(":")[-1].strip())
 
-    # In die System-Tabelle schreiben
-    echo "| $TAG_NAME | $LANG_NAME | $MAX_RAM_MB | $CS_VOL / $CS_INVOL | $CYCLES | $INSTR | $MISSES |" >> "$SUMMARY_SYS"
+user_ms = round(user_sec * 1000, 1)
+kernel_ms = round(sys_sec * 1000, 1)
+total_cpu_ms = round(user_ms + kernel_ms, 1)
+max_ram_mb = round(max_ram_kb / 1024, 2)
+
+out_line = f"| {tag} | {lang} | {max_ram_mb} | {user_ms} | {kernel_ms} | {total_cpu_ms} |\n"
+
+with open(summary_sys, 'a') as f:
+    f.write(out_line)
+END
 }
 
 # Durch alle Tags iterieren
@@ -127,13 +134,13 @@ for TAG in "${TAGS[@]}"; do
     (cd "$PROJECT_ROOT/src/go-parser" && go build -o go-parser-artefact main.go)
 
     echo "Kompiliere Zig-Parser..."
-    (cd "$PROJECT_ROOT/src/zig-parser" && zig build-exe src/main.zig -O ReleaseFast -femit-bin=zig-parser-artefact)
+    (cd "$PROJECT_ROOT/src/zig-parser" && zig build-exe src/main.zig -O ReleaseFast --name zig-parser-artefact)
 
     GO_BIN="$PROJECT_ROOT/src/go-parser/go-parser-artefact"
     ZIG_BIN="$PROJECT_ROOT/src/zig-parser/zig-parser-artefact"
     JSON_OUT="$RESULTS_DIR/results_${TAG}.json"
 
-    # 1. System & Hardware Metriken aufzeichnen (time, perf, pidstat)
+    # 1. System & Process Metriken erfassen
     measure_sys_metrics "Go" "$GO_BIN" "$TAG"
     measure_sys_metrics "Zig" "$ZIG_BIN" "$TAG"
 
@@ -146,7 +153,7 @@ for TAG in "${TAGS[@]}"; do
       --command-name "Go ($TAG)" "$GO_BIN $LOG_FILE" \
       --command-name "Zig ($TAG)" "$ZIG_BIN $LOG_FILE" > /dev/null
 
-    # 3. Daten aus JSON an die Laufzeit-Tabelle hängen
+    # 3. Hyperfine-Daten aus JSON an SUMMARY_TIME hängen
     python3 - "$JSON_OUT" "$TAG" "$SUMMARY_TIME" <<'END'
 import sys
 import json
@@ -176,5 +183,5 @@ done
 echo ""
 echo "=================================================="
 echo " MASTER-BENCHMARK ERFOLGREICH ABGESCHLOSSEN!"
-echo " Alle Messungen (Laufzeit & Metriken) gebündelt in: $SUMMARY_FILE"
+echo " Alle Messungen gebündelt in: $SUMMARY_FILE"
 echo "=================================================="
