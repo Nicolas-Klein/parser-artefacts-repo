@@ -55,12 +55,123 @@ func fastParseInt(b []byte) int {
 	return n
 }
 
-type parseResult struct {
-	counts    [1000]int64
-	lineCount int64
+type LogEntry struct {
+	RemoteHost []byte
+	Identity   []byte
+	User       []byte
+	Timestamp  []byte
+	Request    []byte
+	Statuscode int
+	BytesSent  int64
 }
 
-func processChunck(data []byte, start, end int, wg *sync.WaitGroup, resultChan chan<- parseResult) {
+// Reset bereinigt die Referenzen vor der Rückgabe in den sync.Pool
+func (e *LogEntry) Reset() {
+	e.RemoteHost = nil
+	e.Identity = nil
+	e.User = nil
+	e.Timestamp = nil
+	e.Request = nil
+	e.Statuscode = 0
+	e.BytesSent = 0
+}
+
+// Globaler sync.Pool zur Reduktion von Heap-Allokationen und GC-Druck
+var entryPool = sync.Pool{
+	New: func() any {
+		return &LogEntry{}
+	},
+}
+
+func parseLine(line []byte, entry *LogEntry) error {
+	firstQuote := bytes.IndexByte(line, '"')
+	lastQuote := bytes.LastIndexByte(line, '"')
+
+	if firstQuote == -1 || lastQuote == -1 || firstQuote >= lastQuote {
+		return fmt.Errorf("ungültiges Request-Format")
+	}
+
+	prefix := line[:firstQuote]
+	entry.Request = line[firstQuote+1 : lastQuote]
+	suffix := line[lastQuote+1:]
+
+	// 1. Prefix manuell parsen (RemoteHost, Identity, User, Timestamp)
+	// Trennung nach Leerzeichen ohne strings.Fields (Allokationsfrei)
+	idx := 0
+
+	// RemoteHost
+	start := idx
+	for idx < len(prefix) && prefix[idx] != ' ' {
+		idx++
+	}
+	if idx >= len(prefix) {
+		return fmt.Errorf("ungültiger RemoteHost")
+	}
+	entry.RemoteHost = prefix[start:idx]
+	idx++
+
+	// Identity
+	start = idx
+	for idx < len(prefix) && prefix[idx] != ' ' {
+		idx++
+	}
+	if idx >= len(prefix) {
+		return fmt.Errorf("ungültige Identity")
+	}
+	entry.Identity = prefix[start:idx]
+	idx++
+
+	// User
+	start = idx
+	for idx < len(prefix) && prefix[idx] != ' ' {
+		idx++
+	}
+	if idx >= len(prefix) {
+		return fmt.Errorf("ungültiger User")
+	}
+	entry.User = prefix[start:idx]
+	idx++
+
+	// Timestamp (Rest des Prefixes z.B. [10/Oct/2000:13:55:36 -0700])
+	if idx < len(prefix) {
+		entry.Timestamp = bytes.TrimSpace(prefix[idx:])
+	}
+
+	// 2. Suffix parsen (Statuscode & BytesSent)
+	idx = 0
+	for idx < len(suffix) && suffix[idx] == ' ' {
+		idx++
+	}
+	start = idx
+	for idx < len(suffix) && suffix[idx] != ' ' {
+		idx++
+	}
+	if start == idx {
+		return fmt.Errorf("ungültiger Statuscode")
+	}
+
+	entry.Statuscode = fastParseInt(suffix[start:idx])
+
+	// BytesSent
+	for idx < len(suffix) && suffix[idx] == ' ' {
+		idx++
+	}
+	if idx < len(suffix) {
+		if suffix[idx] != '-' {
+			entry.BytesSent = int64(fastParseInt(suffix[idx:]))
+		}
+	}
+
+	return nil
+}
+
+type parseResult struct {
+	counts          [1000]int64
+	lineCount       int64
+	parseErrorCount int64
+}
+
+func processChunk(data []byte, start, end int, wg *sync.WaitGroup, resultChan chan<- parseResult) {
 	defer wg.Done()
 
 	var res parseResult
@@ -78,10 +189,8 @@ func processChunck(data []byte, start, end int, wg *sync.WaitGroup, resultChan c
 	}
 
 	i := start
-
 	for i < end {
 		lineStart := i
-
 		for i < end && data[i] != '\n' {
 			i++
 		}
@@ -89,34 +198,27 @@ func processChunck(data []byte, start, end int, wg *sync.WaitGroup, resultChan c
 		line := data[lineStart:i]
 		i++
 
-		if len(line) < 10 {
+		if len(line) == 0 {
 			continue
 		}
 		res.lineCount++
 
-		quotePos := bytes.LastIndexByte(line, '"')
+		entry := entryPool.Get().(*LogEntry)
+		err := parseLine(line, entry)
 
-		if quotePos != -1 {
-			rest := line[quotePos+1:]
-			idx := 0
-
-			for idx < len(rest) && rest[idx] == ' ' {
-				idx++
-			}
-
-			if idx+3 <= len(rest) {
-				code := fastParseInt(rest[idx : idx+3])
-
-				if code < 1000 {
-					res.counts[code]++
-				}
+		if err != nil {
+			res.parseErrorCount++
+		} else {
+			if entry.Statuscode < 1000 {
+				res.counts[entry.Statuscode]++
 			}
 		}
 
+		entry.Reset()
+		entryPool.Put(entry)
 	}
 
 	resultChan <- res
-
 }
 
 func main() {
@@ -187,7 +289,7 @@ func main() {
 		}
 
 		wg.Add(1)
-		go processChunck(data, start, end, &wg, resultChan)
+		go processChunk(data, start, end, &wg, resultChan)
 	}
 
 	go func() {
@@ -197,9 +299,11 @@ func main() {
 
 	var totalStatusCounts [1000]int64
 	var totalLineCount int64 = 0
+	var totalErrorCount int64 = 0
 
 	for res := range resultChan {
 		totalLineCount += res.lineCount
+		totalErrorCount += res.parseErrorCount
 		for code := 0; code < 1000; code++ {
 			totalStatusCounts[code] += res.counts[code]
 		}
@@ -208,15 +312,13 @@ func main() {
 	elapsed := time.Since(startTime)
 
 	fmt.Println("\n--- Parsing abgeschlossen ---")
-	fmt.Printf("Verarbeitete Zeilen: %d\n", totalLineCount)
-	fmt.Printf("Benötigte Zeit: %v\n", elapsed)
+	fmt.Printf("Verarbeitete Zeilen: %d (Fehlerhaft: %d)\n", totalLineCount, totalErrorCount)
+	fmt.Printf("Benötigte Zeit:      %v\n", elapsed)
 	fmt.Println("Statuscode-Statistik:")
 	for code, count := range totalStatusCounts {
-
 		if count > 0 {
 			fmt.Printf("    HTTP %d: %d\n", code, count)
 		}
-
 	}
 
 	if *profileFlag {

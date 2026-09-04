@@ -36,6 +36,16 @@ extern "kernel32" fn CloseHandle(
     hObject: HANDLE,
 ) callconv(WINAPI) BOOL;
 
+pub const LogEntry = struct {
+    remote_host: []const u8,
+    identity: []const u8,
+    user: []const u8,
+    timestamp: []const u8,
+    request: []const u8,
+    status_code: u16,
+    bytes_sent: u64,
+};
+
 inline fn fastParseInt(b: []const u8) u16 {
     var n: u16 = 0;
 
@@ -48,9 +58,74 @@ inline fn fastParseInt(b: []const u8) u16 {
     return n;
 }
 
+fn parseLine(line: []const u8) !LogEntry {
+    const first_quote = std.mem.indexOfScalar(u8, line, '"') orelse return error.InvalidFormat;
+    const last_quote = std.mem.lastIndexOfScalar(u8, line, '"') orelse return error.InvalidFormat;
+
+    if (first_quote >= last_quote) return error.InvalidFormat;
+
+    const prefix = line[0..first_quote];
+    const request = line[first_quote + 1 .. last_quote];
+    const suffix = line[last_quote + 1 ..];
+
+    // 1. Prefix zerlegen (Host, Identity, User, Timestamp)
+    var idx: usize = 0;
+
+    // RemoteHost
+    var start = idx;
+    while (idx < prefix.len and prefix[idx] != ' ') : (idx += 1) {}
+    if (idx >= prefix.len) return error.InvalidFormat;
+    const remote_host = prefix[start..idx];
+    idx += 1;
+
+    // Identity
+    start = idx;
+    while (idx < prefix.len and prefix[idx] != ' ') : (idx += 1) {}
+    if (idx >= prefix.len) return error.InvalidFormat;
+    const identity = prefix[start..idx];
+    idx += 1;
+
+    // User
+    start = idx;
+    while (idx < prefix.len and prefix[idx] != ' ') : (idx += 1) {}
+    if (idx >= prefix.len) return error.InvalidFormat;
+    const user = prefix[start..idx];
+    idx += 1;
+
+    // Timestamp
+    const timestamp = std.mem.trim(u8, prefix[idx..], " ");
+
+    // 2. Suffix zerlegen (Statuscode & BytesSent)
+    idx = 0;
+    while (idx < suffix.len and suffix[idx] == ' ') : (idx += 1) {}
+    start = idx;
+    while (idx < suffix.len and suffix[idx] != ' ') : (idx += 1) {}
+    if (start == idx) return error.InvalidFormat;
+
+    const status_code = fastParseInt(suffix[start..idx]);
+
+    // BytesSent
+    var bytes_sent: u64 = 0;
+    while (idx < suffix.len and suffix[idx] == ' ') : (idx += 1) {}
+    if (idx < suffix.len and suffix[idx] != '-') {
+        bytes_sent = fastParseInt(suffix[idx..]);
+    }
+
+    return LogEntry{
+        .remote_host = remote_host,
+        .identity = identity,
+        .user = user,
+        .timestamp = timestamp,
+        .request = request,
+        .status_code = status_code,
+        .bytes_sent = bytes_sent,
+    };
+}
+
 const ThreadResult = struct {
     counts: [1000]u64 = [_]u64{0} ** 1000,
     line_count: u64 = 0,
+    parse_error_count: u64 = 0,
 };
 
 fn processChunk(data: []const u8, start_pos: usize, end_pos: usize, result: *ThreadResult) void {
@@ -58,7 +133,7 @@ fn processChunk(data: []const u8, start_pos: usize, end_pos: usize, result: *Thr
     var end = end_pos;
 
     if (start > 0) {
-        while (start < end and data[start - 1] != '\n') {
+        while (start < data.len and data[start - 1] != '\n') {
             start += 1;
         }
     }
@@ -70,10 +145,8 @@ fn processChunk(data: []const u8, start_pos: usize, end_pos: usize, result: *Thr
     }
 
     var i = start;
-
     while (i < end) {
         const line_start = i;
-
         while (i < end and data[i] != '\n') {
             i += 1;
         }
@@ -81,22 +154,15 @@ fn processChunk(data: []const u8, start_pos: usize, end_pos: usize, result: *Thr
         const line = data[line_start..i];
         i += 1;
 
-        if (line.len < 10) continue;
-        result.line_count += 1;
+        if (line.len == 0) continue;
 
-        if (std.mem.lastIndexOfScalar(u8, line, '"')) |quote_pos| {
-            const rest = line[quote_pos + 1 ..];
-            var idx: usize = 0;
-
-            while (idx < rest.len and rest[idx] == ' ') : (idx += 1) {}
-
-            if (idx + 3 <= rest.len) {
-                const code = fastParseInt(rest[idx .. idx + 3]);
-
-                if (code < 1000) {
-                    result.counts[code] += 1;
-                }
+        if (parseLine(line)) |entry| {
+            if (entry.status_code < 1000) {
+                result.counts[entry.status_code] += 1;
+                result.line_count += 1;
             }
+        } else |_| {
+            result.parse_error_count += 1;
         }
     }
 }
@@ -106,6 +172,11 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const arena_allocator = arena.allocator();
 
     // 2. CLI-Argumente in Zig 0.14.0 (Stabil & Sauber)
     const args = try std.process.argsAlloc(allocator);
@@ -178,11 +249,9 @@ pub fn main() !void {
         }
     }
 
-    const threads = try allocator.alloc(std.Thread, cpu_count);
-    defer allocator.free(threads);
+    const threads = try arena_allocator.alloc(std.Thread, cpu_count);
 
-    const results = try allocator.alloc(ThreadResult, cpu_count);
-    defer allocator.free(results);
+    const results = try arena_allocator.alloc(ThreadResult, cpu_count);
 
     for (results) |*res| {
         res.* = ThreadResult{};
@@ -193,7 +262,6 @@ pub fn main() !void {
     for (0..cpu_count) |w| {
         const start = w * chunk_size;
         var end = start + chunk_size;
-
         if (w == cpu_count - 1) {
             end = file_size;
         }
@@ -207,9 +275,11 @@ pub fn main() !void {
 
     var total_status_counts = [_]u64{0} ** 1000;
     var total_line_count: u64 = 0;
+    var total_error_count: u64 = 0;
 
     for (results) |res| {
         total_line_count += res.line_count;
+        total_error_count += res.parse_error_count;
         for (res.counts, 0..) |count, code| {
             total_status_counts[code] += count;
         }
@@ -220,7 +290,7 @@ pub fn main() !void {
 
     // 6. Ergebnisse ausgeben
     std.debug.print("\n--- Parsing abgeschlossen ---\n", .{});
-    std.debug.print("Verarbeitete Zeilen: {d}\n", .{total_line_count});
+    std.debug.print("Verarbeitete Zeilen: {d} (Fehlerhaft: {d})\n", .{ total_line_count, total_error_count });
     std.debug.print("Benötigte Zeit:      {d} ms\n", .{elapsed_ms});
     std.debug.print("Statuscode-Statistik:\n", .{});
 
