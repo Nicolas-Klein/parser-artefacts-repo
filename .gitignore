@@ -39,6 +39,12 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+generate_charts.py
+generate_cpu_chart.py
+generate_peak_ram_chart.py
+generate_performance_chart.py
+generate_scalability_chart.py
+parse_gctrace.py
 
 # ------------------------------------------------------------------------------
 # Betriebssystem & IDEs
