@@ -227,10 +227,6 @@ pub fn main() !void {
         } else |_| {
             parse_error_count += 1;
         }
-
-        // Arena-Speicher zurücksetzen (behält reservierte Kapazität bei)
-        // Dies entspricht funktional dem Zurücklegen/Resetten des Objekts im sync.Pool
-        _ = arena.reset(.retain_capacity);
     }
 
     const end_time = std.time.nanoTimestamp();
