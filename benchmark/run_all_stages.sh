@@ -12,6 +12,7 @@ SUMMARY_FILE="$RESULTS_DIR/master_summary.md"
 # Temporäre Dateien für die getrennten Tabellen
 SUMMARY_TIME="$RESULTS_DIR/summary_time.md"
 SUMMARY_SYS="$RESULTS_DIR/summary_sys.md"
+SUMMARY_GC="$RESULTS_DIR/summary_gc.md"
 
 # Die zu testenden Tags in exakter Reihenfolge
 TAGS=("new-stage1" "new-stage2" "new-stage3")
@@ -48,9 +49,11 @@ cleanup() {
     cat "$SUMMARY_TIME" > "$SUMMARY_FILE"
     echo -e "\n<br>\n" >> "$SUMMARY_FILE"
     cat "$SUMMARY_SYS" >> "$SUMMARY_FILE"
+    echo -e "\n<br>\n" >> "$SUMMARY_FILE"
+    cat "$SUMMARY_GC" >> "$SUMMARY_FILE"
     
     # Aufräumen der temporären Dateien
-    rm -f "$SUMMARY_TIME" "$SUMMARY_SYS"
+    rm -f "$SUMMARY_TIME" "$SUMMARY_SYS" "$SUMMARY_GC"
     
     git checkout "$ORIGINAL_BRANCH" > /dev/null 2>&1 || true
     git stash pop > /dev/null 2>&1 || true
@@ -72,6 +75,14 @@ Gemessen via \`/usr/bin/time -v\`.
 
 | Stufe / Tag | Sprache | Max RAM (MB) | User CPU Time (ms) | Kernel/System CPU Time (ms) | Total CPU Time (ms) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
+EOF
+
+cat <<EOF > "$SUMMARY_GC"
+# 3. Go Garbage Collector Auswertung (GCTRACE)
+Gemessen via \`GODEBUG=gctrace=1\`.
+
+| Stufe / Tag | GC Runs (Anzahl) | Total GC Pause (ms) | Avg GC Pause / Run (ms) | Peak Heap before GC (MB) |
+| :--- | :--- | :--- | :--- | :--- |
 EOF
 
 # Hilfsfunktion für Systemmetriken
@@ -121,6 +132,58 @@ with open(summary_sys, 'a') as f:
 END
 }
 
+# Hilfsfunktion für Go GC Trace Metriken
+measure_go_gc() {
+    local BIN_PATH=$1
+    local TAG_NAME=$2
+
+    echo "  > Erfasse Go GC-Trace (GODEBUG=gctrace=1)..."
+
+    local GC_LOG="$RESULTS_DIR/gc_${TAG_NAME}.log"
+
+    # Go mit gctrace ausführen (schreibt auf stderr)
+    GODEBUG=gctrace=1 "$BIN_PATH" "$LOG_FILE" > /dev/null 2> "$GC_LOG"
+
+    # Python-Script analysiert gc.log und hängt Zeile an SUMMARY_GC an
+    python3 - "$GC_LOG" "$TAG_NAME" "$SUMMARY_GC" <<'END'
+import sys
+import re
+
+gc_log = sys.argv[1]
+tag = sys.argv[2]
+summary_gc = sys.argv[3]
+
+gc_count = 0
+total_clock_ms = 0.0
+max_heap_mb = 0.0
+
+# Matching pattern für gctrace Output
+pattern = re.compile(r'gc (\d+).*?: ([\d\.\+]+) ms clock, ([\d\.\+/]+) ms cpu, (\d+)->(\d+)->(\d+) MB')
+
+try:
+    with open(gc_log) as f:
+        for line in f:
+            match = pattern.search(line)
+            if match:
+                gc_count += 1
+                clock_parts = [float(x) for x in match.group(2).split('+')]
+                total_clock_ms += sum(clock_parts)
+                heap_before = float(match.group(4))
+                if heap_before > max_heap_mb:
+                    max_heap_mb = heap_before
+except Exception:
+    pass
+
+avg_pause = round(total_clock_ms / gc_count, 3) if gc_count > 0 else 0.0
+total_clock_ms = round(total_clock_ms, 2)
+
+out_line = f"| {tag} | {gc_count} | {total_clock_ms} | {avg_pause} | {max_heap_mb:.2f} |\n"
+
+with open(summary_gc, 'a') as f:
+    f.write(out_line)
+END
+}
+
 # Durch alle Tags iterieren
 for TAG in "${TAGS[@]}"; do
     echo ""
@@ -143,8 +206,11 @@ for TAG in "${TAGS[@]}"; do
     # 1. System & Process Metriken erfassen
     measure_sys_metrics "Go" "$GO_BIN" "$TAG"
     measure_sys_metrics "Zig" "$ZIG_BIN" "$TAG"
+    
+    # 2. Go GC Trace erfassen
+    measure_go_gc "$GO_BIN" "$TAG"
 
-    # 2. Hyperfine-Messung
+    # 3. Hyperfine-Messung
     echo "  > Starte Hyperfine..."
     hyperfine \
       --warmup 3 \
@@ -153,7 +219,7 @@ for TAG in "${TAGS[@]}"; do
       --command-name "Go ($TAG)" "$GO_BIN $LOG_FILE" \
       --command-name "Zig ($TAG)" "$ZIG_BIN $LOG_FILE" > /dev/null
 
-    # 3. Hyperfine-Daten aus JSON an SUMMARY_TIME hängen
+    # 4. Hyperfine-Daten aus JSON an SUMMARY_TIME hängen
     python3 - "$JSON_OUT" "$TAG" "$SUMMARY_TIME" <<'END'
 import sys
 import json
