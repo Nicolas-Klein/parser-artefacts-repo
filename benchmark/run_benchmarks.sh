@@ -8,8 +8,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 LOG_FILE="$PROJECT_ROOT/generator/benchmark_large.log"
-GO_BIN="$PROJECT_ROOT/src/go-parser/go-parser-artefact"
-ZIG_BIN="$PROJECT_ROOT/src/zig-parser/zig-parser-artefact"
+GO_DIR="$PROJECT_ROOT/src/go-parser"
+ZIG_DIR="$PROJECT_ROOT/src/zig-parser"
+
+GO_BIN="$GO_DIR/go-parser-artefact"
+ZIG_BIN="$ZIG_DIR/zig-parser-artefact"
 RESULTS_DIR="$SCRIPT_DIR/results"
 
 mkdir -p "$RESULTS_DIR"
@@ -25,18 +28,15 @@ if ! command -v hyperfine &> /dev/null; then
     exit 1
 fi
 
-# 2. Prüfen ob Binärdateien existieren
-if [ ! -f "$GO_BIN" ]; then
-    echo "Fehler: Go-Artefakt nicht gefunden unter: $GO_BIN"
-    echo "Bitte kompiliere erst den Go-Parser!"
-    exit 1
-fi
+# Go bauen
+echo "  > Baue Go-Parser ($GO_BIN)..."
+(cd "$GO_DIR" && go build -o "$GO_BIN" .)
 
-if [ ! -f "$ZIG_BIN" ]; then
-    echo "Fehler: Zig-Artefakt nicht gefunden unter: $ZIG_BIN"
-    echo "Bitte kompiliere erst den Zig-Parser!"
-    exit 1
-fi
+echo "  > Baue Zig-Parser ($ZIG_BIN)..."
+(cd "$ZIG_DIR" && zig build-exe -O ReleaseFast -femit-bin="$ZIG_BIN" src/main.zig)
+
+echo "  > Build erfolgreich abgeschlossen."
+echo ""
 
 # 3. Prüfen ob Logdatei existiert
 if [ ! -f "$LOG_FILE" ]; then
@@ -54,13 +54,13 @@ echo "Führe Hyperfine-Messungen durch (10 Durchläufe, 3 Warmups)..."
 hyperfine \
   --warmup 3 \
   --runs 10 \
-  --export-json "$RESULTS_DIR/stage3_results.json" \
-  --export-markdown "$RESULTS_DIR/stage3_results.md" \
+  --export-json "$RESULTS_DIR/stage3_v2_results.json" \
+  --export-markdown "$RESULTS_DIR/stage3_v2_results.md" \
   --command-name "Go-Baseline (Stufe 3)" "$GO_BIN $LOG_FILE" \
   --command-name "Zig-Baseline (Stufe 3)" "$ZIG_BIN $LOG_FILE"
 
 echo ""
 echo "=================================================="
 echo "Benchmark abgeschlossen!"
-echo "Ergebnisse gespeichert in: $RESULTS_DIR/stage3_results.md"
+echo "Ergebnisse gespeichert in: $RESULTS_DIR/stage3_v2_results.md"
 echo "=================================================="
