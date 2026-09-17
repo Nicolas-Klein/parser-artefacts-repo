@@ -148,14 +148,11 @@ measure_pmap_metrics() {
 
     echo "  > Erfasse pmap / smaps Speicherlayout für $LANG_NAME..."
 
-    # BENCHMARK_PAUSE aktivieren, damit schnelle Artefakte am Ende der main() nicht sofort terminieren
-    export BENCHMARK_PAUSE=1
-
     # 1. Prozess im Hintergrund starten
     "$BIN_PATH" "$LOG_FILE" > /dev/null 2>&1 &
     local TARGET_PID=$!
 
-    # 2. Polling: Warten bis VmRSS > 0 ist (max 100ms)
+    # 2. Polling: Warten bis der Prozess echten RSS-Speicher zugewiesen hat (max 100ms)
     local count=0
     while [ $count -lt 100 ]; do
         if [ -d "/proc/$TARGET_PID" ]; then
@@ -168,8 +165,11 @@ measure_pmap_metrics() {
         count=$((count + 1))
     done
 
-    # 3. Python liest /proc/[PID]/smaps aus
-    python3 - "$TARGET_PID" "$TAG_NAME" "$LANG_NAME" "$SUMMARY_PMAP" <<'END'
+    # 3. Prozess mit SIGSTOP einfrieren, damit /proc/$TARGET_PID/smaps stabil lesbar bleibt
+    kill -STOP "$TARGET_PID" 2>/dev/null || true
+
+    # 4. Python-Script liest /proc/$TARGET_PID/smaps aus
+    python3 - "$TARGET_PID" "$TAG_NAME" "$LANG_NAME" "$SUMMARY_PMAP" "$LOG_FILE" <<'END'
 import sys
 import os
 import re
@@ -178,6 +178,7 @@ pid = sys.argv[1]
 tag = sys.argv[2]
 lang = sys.argv[3]
 summary_pmap = sys.argv[4]
+log_file = os.path.basename(sys.argv[5])
 
 smaps_path = f"/proc/{pid}/smaps"
 
@@ -191,7 +192,8 @@ if os.path.exists(smaps_path):
         with open(smaps_path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
 
-        for block in content.split("\n\n"):
+        blocks = content.split("\n\n")
+        for block in blocks:
             lines = block.split("\n")
             if not lines or not lines[0]:
                 continue
@@ -219,14 +221,16 @@ if os.path.exists(smaps_path):
 
             if "[heap]" in header:
                 heap_ws += rss_kb
-            elif filepath and not filepath.endswith(".so") and "/bin/" not in filepath and "go-parser" not in filepath and "zig-parser" not in filepath:
+            # Mapped File Erkennung: Ge-mmapptes Logfile ODER anonyme/shared Sections
+            elif log_file in filepath or (filepath and not filepath.endswith(".so") and "/bin/" not in filepath and "/lib" not in filepath):
                 mapped_size += size_kb
                 mapped_ws += rss_kb
 
-        # Fallback falls mapped_ws 0.0, aber Total vorhanden ist (Zero-Copy Paging)
+        # Fallback: Falls Mapped WS 0.0 ist (z.B. bei anonymen Zero-Copy Mappings)
         if mapped_ws == 0.0 and total_ws > 0.0:
             mapped_ws = max(0.0, total_ws - heap_ws - private_ws)
 
+        # WICHTIG: Schreiben erst AUSSERHALB der for-Schleife nach Aufsummierung aller Blöcke!
         out_line = f"| {tag} | {lang} | {mapped_size/1024.0:.1f} | {mapped_ws/1024.0:.1f} | {heap_ws/1024.0:.2f} | {private_size/1024.0:.1f} | {total_ws/1024.0:.1f} |\n"
         with open(summary_pmap, "a", encoding="utf-8") as f:
             f.write(out_line)
@@ -236,8 +240,8 @@ if os.path.exists(smaps_path):
 
 END
 
-    # 4. Nach der Messung den Prozess bei Bedarf beenden und Aufräumen
-    unset BENCHMARK_PAUSE
+    # 5. Prozess wieder aufwecken und beenden
+    kill -CONT "$TARGET_PID" 2>/dev/null || true
     kill -9 "$TARGET_PID" 2>/dev/null || true
     wait "$TARGET_PID" 2>/dev/null || true
 }
