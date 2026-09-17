@@ -46,18 +46,36 @@ cleanup() {
     echo ""
     echo "Füge Tabellen zusammen und kehre zum Branch zurück..."
     
-    # Füge Laufzeit, System-Metriken, GC und Pmap in einer Datei zusammen
-    cat "$SUMMARY_TIME" > "$SUMMARY_FILE"
-    echo -e "\n<br>\n" >> "$SUMMARY_FILE"
-    cat "$SUMMARY_SYS" >> "$SUMMARY_FILE"
-    echo -e "\n<br>\n" >> "$SUMMARY_FILE"
-    cat "$SUMMARY_GC" >> "$SUMMARY_FILE"
-    echo -e "\n<br>\n" >> "$SUMMARY_FILE"
-    [ -f "$SUMMARY_PMAP" ] && cat "$SUMMARY_PMAP" >> "$SUMMARY_FILE"
+    # 1. Hauptdatei leeren / neu anlegen
+    : > "$SUMMARY_FILE"
     
-    # Aufräumen der temporären Dateien
-    rm -f "$SUMMARY_TIME" "$SUMMARY_SYS" "$SUMMARY_GC" "$SUMMARY_PMAP"
+    # 2. Laufzeit-Tabelle anhängen
+    if [ -f "$SUMMARY_TIME" ]; then
+        cat "$SUMMARY_TIME" >> "$SUMMARY_FILE"
+        echo -e "\n<br>\n" >> "$SUMMARY_FILE"
+    fi
+
+    # 3. System-Metriken anhängen
+    if [ -f "$SUMMARY_SYS" ]; then
+        cat "$SUMMARY_SYS" >> "$SUMMARY_FILE"
+        echo -e "\n<br>\n" >> "$SUMMARY_FILE"
+    fi
+
+    # 4. GC Trace Auswertung anhängen
+    if [ -f "$SUMMARY_GC" ]; then
+        cat "$SUMMARY_GC" >> "$SUMMARY_FILE"
+        echo -e "\n<br>\n" >> "$SUMMARY_FILE"
+    fi
+
+    # 5. Pmap Speicheranalyse anhängen
+    if [ -f "$SUMMARY_PMAP" ]; then
+        cat "$SUMMARY_PMAP" >> "$SUMMARY_FILE"
+    fi
     
+    # Temporäre Dateien aufräumen (Fehler ignorieren)
+    rm -f "$SUMMARY_TIME" "$SUMMARY_SYS" "$SUMMARY_GC" "$SUMMARY_PMAP" 2>/dev/null || true
+    
+    # Git-Zustand wiederherstellen
     git checkout "$ORIGINAL_BRANCH" > /dev/null 2>&1 || true
     git stash pop > /dev/null 2>&1 || true
 }
