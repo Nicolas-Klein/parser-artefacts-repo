@@ -302,7 +302,7 @@ pub fn main() !void {
 
     if (std.process.getEnvVarOwned(allocator, "BENCHMARK_PAUSE")) |val| {
         if (std.mem.eql(u8, val, "1")) {
-            std.time.sleep(2 * std.time.s_ns); // 2 Sekunden Pause
+            std.time.sleep(2 * std.time.ns_per_s); // 2 Sekunden Pause
         }
         allocator.free(val);
     } else |_| {}
