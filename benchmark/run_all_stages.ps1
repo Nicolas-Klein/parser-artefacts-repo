@@ -103,6 +103,8 @@ function Measure-VMMapMetrics {
 
     $csvOut = "$ResultsDir\vmmap_${LangName}_${TagName}.csv"
     $mmpOut = "$ResultsDir\vmmap_${LangName}_${TagName}.mmp"
+    
+    Start-Sleep -Milliseconds 250
 
     try {
         # 1. Start-Info vorbereiten & BENCHMARK_PAUSE explizit in den Prozess injizieren
