@@ -178,11 +178,22 @@ pub fn main() !void {
 
     const arena_allocator = arena.allocator();
 
+    const mapped_slice = [_]i32{ 1, 2, 3, 4 };
+
+    if (mapped_slice.len > 0) {
+        var dummy: u8 = 0;
+        var i: usize = 0;
+        while (i < mapped_slice.len) : (i += 4096) { // Jede 4KB Page 1x touch
+            dummy = dummy +% mapped_slice[i];
+        }
+        std.mem.doNotOptimizeAway(dummy);
+    }
+
     if (std.process.getEnvVarOwned(allocator, "BENCHMARK_PAUSE")) |val| {
         defer allocator.free(val);
         if (std.mem.eql(u8, val, "1")) {
             // Exakt 2 Sekunden schlafen (2 * 10^9 Nanosekunden)
-            std.time.sleep(5 * std.time.ns_per_s);
+            std.time.sleep(2 * std.time.ns_per_s);
         }
     } else |_| {}
 
