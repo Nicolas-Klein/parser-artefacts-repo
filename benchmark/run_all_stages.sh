@@ -167,30 +167,26 @@ measure_smaps_metrics() {
 
     echo "  > Erfasse smaps Speicheranalyse für $LANG_NAME..."
 
-    # 1. BENCHMARK_PAUSE für die Applikation bereitstellen
     export BENCHMARK_PAUSE=1
 
-    # 2. Prozess im Hintergrund starten
+    # 1. Prozess im Hintergrund starten
     "$BIN_PATH" "$LOG_FILE" > /dev/null 2>&1 &
     local TARGET_PID=$!
 
-    # 3. Polling: Warten bis VmRSS > 0 ist (max 100ms)
-    local count=0
-    while [ $count -lt 100 ]; do
-        if [ -d "/proc/$TARGET_PID" ]; then
-            local rss=$(grep -i "VmRSS:" "/proc/$TARGET_PID/status" 2>/dev/null | awk '{print $2}')
-            if [ -n "$rss" ] && [ "$rss" -gt 0 ]; then
-                break
-            fi
-        fi
-        sleep 0.001
-        count=$((count + 1))
-    done
-
-    # 4. Prozess via SIGSTOP einfrieren
+    # 2. Sofort stoppen, um Beendigung in Stufe 3 zuvorzukommen
     kill -STOP "$TARGET_PID" 2>/dev/null || true
 
-    # 5. Python-Script parsed /proc/[PID]/smaps komplett und schreibt genau EINMAL
+    # Kurzer Wait, damit Kernel den Status aktualisiert
+    sleep 0.05
+
+    # 3. Falls der Prozess beendet wurde bevor STOP greifen konnte: Erneut mit Pause versuchen
+    if [ ! -d "/proc/$TARGET_PID" ]; then
+        "$BIN_PATH" "$LOG_FILE" > /dev/null 2>&1 &
+        TARGET_PID=$!
+        kill -STOP "$TARGET_PID" 2>/dev/null || true
+    fi
+
+    # 4. Python-Script parsed /proc/[PID]/smaps und SCHREIBT GARANTIERT EINE ZEILE
     python3 - "$TARGET_PID" "$TAG_NAME" "$LANG_NAME" "$SUMMARY_SMAPS" "$LOG_FILE" <<'END'
 import sys
 import os
@@ -247,21 +243,21 @@ if os.path.exists(smaps_path):
                 mapped_size += size_kb
                 mapped_ws += rss_kb
 
-        # Fallback bei Zero-Copy Mappings (falls mapped_ws als anonym klassifiziert wurde)
+        # Fallback bei Zero-Copy Mappings
         if mapped_ws == 0.0 and total_ws > 0.0:
             mapped_ws = max(0.0, total_ws - heap_ws - private_ws)
-
-        # Erst NACH der Schleife werden die aufsummierten Werte geschrieben
-        out_line = f"| {tag} | {lang} | {mapped_size/1024.0:.1f} | {mapped_ws/1024.0:.1f} | {heap_ws/1024.0:.2f} | {private_size/1024.0:.1f} | {total_ws/1024.0:.1f} |\n"
-        with open(summary_smaps, "a", encoding="utf-8") as f:
-            f.write(out_line)
 
     except Exception as e:
         print(f"  [smaps error] {e}")
 
+# Das Schreiben findet IMMER statt (auch wenn /proc/PID/smaps nicht mehr existierte)
+out_line = f"| {tag} | {lang} | {mapped_size/1024.0:.1f} | {mapped_ws/1024.0:.1f} | {heap_ws/1024.0:.2f} | {private_size/1024.0:.1f} | {total_ws/1024.0:.1f} |\n"
+with open(summary_smaps, "a", encoding="utf-8") as f:
+    f.write(out_line)
+
 END
 
-    # 6. Aufraumen
+    # 5. Prozess wieder aufwecken und beenden
     unset BENCHMARK_PAUSE
     kill -CONT "$TARGET_PID" 2>/dev/null || true
     kill -9 "$TARGET_PID" 2>/dev/null || true
