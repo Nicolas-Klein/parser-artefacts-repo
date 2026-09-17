@@ -104,22 +104,25 @@ function Measure-VMMapMetrics {
     $csvOut = "$ResultsDir\vmmap_${LangName}_${TagName}.csv"
     $mmpOut = "$ResultsDir\vmmap_${LangName}_${TagName}.mmp"
 
-    # Für extrem schnelle Läufe (Stufe 3) vervielfachen wir temporär die Eingabedatei für VMMap,
-    # damit der Zero-Copy-Parser lange genug im Speicher bleibt (ohne Git-Code zu ändern).
     $VMMapLogInput = $LogPath
-    $TempLogCreated = $false
 
     try {
-        # VMMap MUSS das Artefakt direkt starten (kein cmd.exe Wrapper)
+        # 1. BENCHMARK_PAUSE in der aktuellen Session setzen.
+        # Kindprozesse (wie VMMap und der von VMMap gespawnte Parser) erben diese Variable automatisch!
+        $env:BENCHMARK_PAUSE = "1"
+
+        # Executable und Log-Pfad zusammenfügen
         $targetCmd = "`"$BinPath`" `"$VMMapLogInput`""
 
-        # 1. CSV-Export
+        # 2. CSV-Export starten
         $argsCsv = @("-p", "0", $targetCmd, $csvOut)
         $vmmapProc = Start-Process -FilePath $VMMapPath -ArgumentList $argsCsv -PassThru -WindowStyle Hidden
+        
+        # Warten, bis VMMap fertig ist (der Sleep im Artefakt gibt VMMap Zeit zum Erfassen)
         $null = $vmmapProc.WaitForExit(15000)
         if (-not $vmmapProc.HasExited) { try { $vmmapProc.Kill() } catch {} }
 
-        # 2. .mmp Snapshot
+        # 3. .mmp Snapshot exportieren
         $argsMmp = @("-p", "0", $targetCmd, $mmpOut)
         $vmmapSnap = Start-Process -FilePath $VMMapPath -ArgumentList $argsMmp -PassThru -WindowStyle Hidden
         $null = $vmmapSnap.WaitForExit(15000)
@@ -129,10 +132,8 @@ function Measure-VMMapMetrics {
         Write-Host "  [VMMap Fehler] Konnte Speicheranalyse nicht durchführen: $_" -ForegroundColor Red
         return
     } finally {
-        # Temporäres Skalierungs-Logfile aufräumen
-        if ($TempLogCreated -and (Test-Path $VMMapLogInput)) {
-            Remove-Item $VMMapLogInput -ErrorAction SilentlyContinue
-        }
+        # WICHTIG: Umgebungsvariable wieder entfernen, damit Hyperfine nicht beeinflusst wird!
+        Remove-Item env:\BENCHMARK_PAUSE -ErrorAction SilentlyContinue
     }
 
     Start-Sleep -Milliseconds 300
