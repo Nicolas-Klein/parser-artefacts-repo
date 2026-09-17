@@ -322,10 +322,12 @@ func main() {
 	}
 
 	if *profileFlag {
-		// Tipp: Garbage Collector kurz vor dem Heap-Snapshot steuern oder
-		// während des Parsings allozierten Gesamtspeicher auslesen
 		fm, _ := os.Create("mem.prof")
 		defer fm.Close()
 		pprof.WriteHeapProfile(fm)
+	}
+
+	if os.Getenv("BENCHMARK_PAUSE") == "1" {
+		time.Sleep(2 * time.Second)
 	}
 }

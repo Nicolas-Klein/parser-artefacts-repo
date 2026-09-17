@@ -299,4 +299,11 @@ pub fn main() !void {
             std.debug.print("    HTTP {d}: {d}\n", .{ code, count });
         }
     }
+
+    if (std.process.getEnvVarOwned(allocator, "BENCHMARK_PAUSE")) |val| {
+        if (std.mem.eql(u8, val, "1")) {
+            std.time.sleep(2 * std.time.s_ns); // 2 Sekunden Pause
+        }
+        allocator.free(val);
+    } else |_| {}
 }
