@@ -104,36 +104,48 @@ function Measure-VMMapMetrics {
     $csvOut = "$ResultsDir\vmmap_${LangName}_${TagName}.csv"
     $mmpOut = "$ResultsDir\vmmap_${LangName}_${TagName}.mmp"
 
-    $VMMapLogInput = $LogPath
-
     try {
-        # 1. BENCHMARK_PAUSE in der aktuellen Session setzen.
-        # Kindprozesse (wie VMMap und der von VMMap gespawnte Parser) erben diese Variable automatisch!
-        $env:BENCHMARK_PAUSE = "1"
+        # 1. Start-Info vorbereiten & BENCHMARK_PAUSE explizit in den Prozess injizieren
+        $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pinfo.FileName = $BinPath
+        $pinfo.Arguments = "`"$LogPath`""
+        $pinfo.UseShellExecute = $false
+        $pinfo.CreateNoWindow = $true
+        $pinfo.EnvironmentVariables["BENCHMARK_PAUSE"] = "1"
 
-        # Executable und Log-Pfad zusammenfügen
-        $targetCmd = "`"$BinPath`" `"$VMMapLogInput`""
+        # 2. Prozess starten (schläft nun für 2 Sekunden am Ende der Ausführung)
+        $targetProc = [System.Diagnostics.Process]::Start($pinfo)
+        $targetPid = $targetProc.Id
 
-        # 2. CSV-Export starten
-        $argsCsv = @("-p", "0", $targetCmd, $csvOut)
+        # 100ms warten, damit das Memory-Mapping von Stufe 3 aktiv aufgebaut ist
+        Start-Sleep -Milliseconds 100
+
+        # 3. VMMap via PID anhängen (-p <PID>)
+        $argsCsv = @("-p", $targetPid, $csvOut)
         $vmmapProc = Start-Process -FilePath $VMMapPath -ArgumentList $argsCsv -PassThru -WindowStyle Hidden
-        
-        # Warten, bis VMMap fertig ist (der Sleep im Artefakt gibt VMMap Zeit zum Erfassen)
-        $null = $vmmapProc.WaitForExit(15000)
-        if (-not $vmmapProc.HasExited) { try { $vmmapProc.Kill() } catch {} }
 
-        # 3. .mmp Snapshot exportieren
-        $argsMmp = @("-p", "0", $targetCmd, $mmpOut)
+        # Warten, bis der Prozess und VMMap geordnet fertig sind
+        $null = $targetProc.WaitForExit(5000)
+        $null = $vmmapProc.WaitForExit(5000)
+
+        if (-not $vmmapProc.HasExited) {
+            try { $vmmapProc.Kill() } catch {}
+        }
+
+        # 4. Zweiter Durchlauf für den .mmp Snapshot
+        $targetProcSnap = [System.Diagnostics.Process]::Start($pinfo)
+        Start-Sleep -Milliseconds 100
+
+        $argsMmp = @("-p", $targetProcSnap.Id, $mmpOut)
         $vmmapSnap = Start-Process -FilePath $VMMapPath -ArgumentList $argsMmp -PassThru -WindowStyle Hidden
-        $null = $vmmapSnap.WaitForExit(15000)
+
+        $null = $targetProcSnap.WaitForExit(5000)
+        $null = $vmmapSnap.WaitForExit(5000)
         if (-not $vmmapSnap.HasExited) { try { $vmmapSnap.Kill() } catch {} }
 
     } catch {
         Write-Host "  [VMMap Fehler] Konnte Speicheranalyse nicht durchführen: $_" -ForegroundColor Red
         return
-    } finally {
-        # WICHTIG: Umgebungsvariable wieder entfernen, damit Hyperfine nicht beeinflusst wird!
-        Remove-Item env:\BENCHMARK_PAUSE -ErrorAction SilentlyContinue
     }
 
     Start-Sleep -Milliseconds 300
@@ -147,7 +159,7 @@ function Measure-VMMapMetrics {
     $csvOutPy = $csvOut.Replace('\', '/')
     $SummaryVMMapPy = $SummaryVMMap.Replace('\', '/')
 
-    # Python-Script mit robuster Einheiten- & Spaltenauswertung
+    # Python-Script Auswertung
     $PyExtractVMMap = @"
 import csv
 
@@ -176,11 +188,8 @@ try:
                 continue
             
             category = row[0].strip()
-            
-            # Alle numerischen Felder parsen (VMMap gibt KB-Werte in der Summary aus)
             nums = [parse_vmmap_val(col) for col in row[1:]]
             
-            # Auswertung der VMMap Summary-Kategorien
             if category in ["Mapped File", "Section", "Shareable"]:
                 if len(nums) >= 1 and nums[0] > 0: mapped_size = max(mapped_size, nums[0] / 1024.0)
                 if len(nums) >= 4 and nums[3] > 0: mapped_ws = max(mapped_ws, nums[3] / 1024.0)
