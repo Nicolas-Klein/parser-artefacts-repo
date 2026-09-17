@@ -160,12 +160,13 @@ END
 }
 
 # Hilfsfunktion für Speicheranalyse via /proc/[PID]/smaps
+# Hilfsfunktion für Speicheranalyse via /proc/[PID]/smaps
 measure_smaps_metrics() {
     local LANG_NAME=$1
     local BIN_PATH=$2
     local TAG_NAME=$3
 
-    echo "  > Erfasse smaps Speicheranalyse für $LANG_NAME..."
+    echo "  > Erfasse smaps Speicherlayout für $LANG_NAME..."
 
     export BENCHMARK_PAUSE=1
 
@@ -173,20 +174,29 @@ measure_smaps_metrics() {
     "$BIN_PATH" "$LOG_FILE" > /dev/null 2>&1 &
     local TARGET_PID=$!
 
-    # 2. Sofort stoppen, um Beendigung in Stufe 3 zuvorzukommen
+    # 2. Synchronisations-Schleife: Warten bis das OS registriert, dass RAM belegt wurde
+    local i=0
+    while [ $i -lt 500 ]; do
+        if [ -f "/proc/$TARGET_PID/status" ]; then
+            # Liest den physisch belegten Speicher (VmRSS)
+            local rss_kb=$(grep -i "VmRSS:" "/proc/$TARGET_PID/status" 2>/dev/null | awk '{print $2}')
+            if [ -n "$rss_kb" ] && [ "$rss_kb" -gt 0 ]; then
+                # RAM ist zugewiesen! Sofort einfrieren
+                kill -STOP "$TARGET_PID" 2>/dev/null || true
+                break
+            fi
+        else
+            # Prozess ist bereits durchgelaufen (sehr schnelle Stufe)
+            break
+        fi
+        sleep 0.001
+        i=$((i + 1))
+    done
+
+    # Falls der Prozess bereits gestoppt war oder nicht erwischt wurde, sicherheitshalber STOP senden
     kill -STOP "$TARGET_PID" 2>/dev/null || true
 
-    # Kurzer Wait, damit Kernel den Status aktualisiert
-    sleep 0.05
-
-    # 3. Falls der Prozess beendet wurde bevor STOP greifen konnte: Erneut mit Pause versuchen
-    if [ ! -d "/proc/$TARGET_PID" ]; then
-        "$BIN_PATH" "$LOG_FILE" > /dev/null 2>&1 &
-        TARGET_PID=$!
-        kill -STOP "$TARGET_PID" 2>/dev/null || true
-    fi
-
-    # 4. Python-Script parsed /proc/[PID]/smaps und SCHREIBT GARANTIERT EINE ZEILE
+    # 3. Python-Skript liest /proc/[PID]/smaps aus und schreibt die Zeile
     python3 - "$TARGET_PID" "$TAG_NAME" "$LANG_NAME" "$SUMMARY_SMAPS" "$LOG_FILE" <<'END'
 import sys
 import os
@@ -243,21 +253,20 @@ if os.path.exists(smaps_path):
                 mapped_size += size_kb
                 mapped_ws += rss_kb
 
-        # Fallback bei Zero-Copy Mappings
+        # Fallback für Zero-Copy (falls der Kernel die Datei unter anonymem Speicher führt)
         if mapped_ws == 0.0 and total_ws > 0.0:
             mapped_ws = max(0.0, total_ws - heap_ws - private_ws)
 
     except Exception as e:
         print(f"  [smaps error] {e}")
 
-# Das Schreiben findet IMMER statt (auch wenn /proc/PID/smaps nicht mehr existierte)
 out_line = f"| {tag} | {lang} | {mapped_size/1024.0:.1f} | {mapped_ws/1024.0:.1f} | {heap_ws/1024.0:.2f} | {private_size/1024.0:.1f} | {total_ws/1024.0:.1f} |\n"
 with open(summary_smaps, "a", encoding="utf-8") as f:
     f.write(out_line)
 
 END
 
-    # 5. Prozess wieder aufwecken und beenden
+    # 4. Prozess aufwecken, beenden und Ressourcen freigeben
     unset BENCHMARK_PAUSE
     kill -CONT "$TARGET_PID" 2>/dev/null || true
     kill -9 "$TARGET_PID" 2>/dev/null || true
