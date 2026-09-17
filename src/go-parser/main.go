@@ -209,6 +209,10 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
+	if os.Getenv("BENCHMARK_PAUSE") == "1" {
+		time.Sleep(2 * time.Second)
+	}
+
 	fmt.Println("GO-Parser")
 
 	numWorkers := runtime.NumCPU()
@@ -296,7 +300,7 @@ func main() {
 		pprof.WriteHeapProfile(fm)
 	}
 
-	if os.Getenv("BENCHMARK_PAUSE") == "1" {
-		time.Sleep(2 * time.Second)
+	for {
+
 	}
 }

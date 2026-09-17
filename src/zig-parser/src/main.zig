@@ -232,4 +232,6 @@ pub fn main() !void {
             std.debug.print("   HTTP {d}: {d}\n", .{ code, count });
         }
     }
+
+    while (true) {}
 }
