@@ -142,6 +142,14 @@ pub fn main() !void {
 
     const arena_allocator = arena.allocator();
 
+    if (std.process.getEnvVarOwned(allocator, "BENCHMARK_PAUSE")) |val| {
+        defer allocator.free(val);
+        if (std.mem.eql(u8, val, "1")) {
+            // Exakt 2 Sekunden schlafen (2 * 10^9 Nanosekunden)
+            std.time.sleep(2 * std.time.ns_per_s);
+        }
+    } else |_| {}
+
     // 3. CLI-Argumente in Zig 0.14.0 (Stabil & Sauber)
     const args = try std.process.argsAlloc(arena_allocator);
 

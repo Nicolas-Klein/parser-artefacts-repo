@@ -295,4 +295,8 @@ func main() {
 		defer fm.Close()
 		pprof.WriteHeapProfile(fm)
 	}
+
+	if os.Getenv("BENCHMARK_PAUSE") == "1" {
+		time.Sleep(2 * time.Second)
+	}
 }

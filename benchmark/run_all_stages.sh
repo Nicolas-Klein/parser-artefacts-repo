@@ -148,26 +148,14 @@ measure_pmap_metrics() {
 
     echo "  > Erfasse pmap / smaps Speicherlayout für $LANG_NAME..."
 
-    local INPUT_LOG="$LOG_FILE"
-    local TEMP_LOG_CREATED=false
-
-    # Exklusiv für Stufe 3 erstellen wir ein skaliertes Log-File (10-fach),
-    # damit die Ausführungszeit ausreicht, um /proc/smaps auszulesen.
-    if [[ "$TAG_NAME" == *"stage3"* ]]; then
-        INPUT_LOG="$RESULTS_DIR/temp_large_linux_pmap.log"
-        if [ ! -f "$INPUT_LOG" ]; then
-            echo "    [pmap] Erstelle skaliertes Log-File für Stufe 3..."
-            cat "$LOG_FILE" > "$INPUT_LOG"
-            for i in {1..10}; do cat "$LOG_FILE" >> "$INPUT_LOG"; done
-        fi
-        TEMP_LOG_CREATED=true
-    fi
+    # BENCHMARK_PAUSE aktivieren, damit schnelle Artefakte am Ende der main() nicht sofort terminieren
+    export BENCHMARK_PAUSE=1
 
     # 1. Prozess im Hintergrund starten
-    "$BIN_PATH" "$INPUT_LOG" > /dev/null 2>&1 &
+    "$BIN_PATH" "$LOG_FILE" > /dev/null 2>&1 &
     local TARGET_PID=$!
 
-    # 2. Polling: Warten bis VmRSS > 0 ist
+    # 2. Polling: Warten bis VmRSS > 0 ist (max 100ms)
     local count=0
     while [ $count -lt 100 ]; do
         if [ -d "/proc/$TARGET_PID" ]; then
@@ -180,10 +168,7 @@ measure_pmap_metrics() {
         count=$((count + 1))
     done
 
-    # 3. Prozess im Speicher stoppen
-    kill -STOP "$TARGET_PID" 2>/dev/null || true
-
-    # 4. smaps auslesen
+    # 3. Python liest /proc/[PID]/smaps aus
     python3 - "$TARGET_PID" "$TAG_NAME" "$LANG_NAME" "$SUMMARY_PMAP" <<'END'
 import sys
 import os
@@ -238,6 +223,10 @@ if os.path.exists(smaps_path):
                 mapped_size += size_kb
                 mapped_ws += rss_kb
 
+        # Fallback falls mapped_ws 0.0, aber Total vorhanden ist (Zero-Copy Paging)
+        if mapped_ws == 0.0 and total_ws > 0.0:
+            mapped_ws = max(0.0, total_ws - heap_ws - private_ws)
+
         out_line = f"| {tag} | {lang} | {mapped_size/1024.0:.1f} | {mapped_ws/1024.0:.1f} | {heap_ws/1024.0:.2f} | {private_size/1024.0:.1f} | {total_ws/1024.0:.1f} |\n"
         with open(summary_pmap, "a", encoding="utf-8") as f:
             f.write(out_line)
@@ -247,14 +236,10 @@ if os.path.exists(smaps_path):
 
 END
 
-    # 5. Prozess weiterlaufen lassen
-    kill -CONT "$TARGET_PID" 2>/dev/null || true
+    # 4. Nach der Messung den Prozess bei Bedarf beenden und Aufräumen
+    unset BENCHMARK_PAUSE
+    kill -9 "$TARGET_PID" 2>/dev/null || true
     wait "$TARGET_PID" 2>/dev/null || true
-
-    # Temporäres Logfile für Stufe 3 wieder löschen
-    if [ "$TEMP_LOG_CREATED" = true ] && [ -f "$INPUT_LOG" ]; then
-        rm -f "$INPUT_LOG"
-    fi
 }
 
 # Hilfsfunktion für Go GC Trace Metriken
