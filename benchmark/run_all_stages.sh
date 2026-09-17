@@ -323,8 +323,8 @@ for TAG in "${TAGS[@]}"; do
       --warmup 3 \
       --runs 10 \
       --export-json "$JSON_OUT" \
-      --command-name "Go ($TAG)" "$GO_BIN$LOG_FILE" \
-      --command-name "Zig ($TAG)" "$ZIG_BIN$LOG_FILE" > /dev/null
+      --command-name "Go ($TAG)" "$GO_BIN $LOG_FILE" \
+      --command-name "Zig ($TAG)" "$ZIG_BIN $LOG_FILE" > /dev/null
 
     # 5. Hyperfine-Daten aus JSON an SUMMARY_TIME hängen
     python3 - "$JSON_OUT" "$TAG" "$SUMMARY_TIME" <<'END'

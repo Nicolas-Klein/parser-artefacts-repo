@@ -299,8 +299,4 @@ func main() {
 		defer fm.Close()
 		pprof.WriteHeapProfile(fm)
 	}
-
-	for {
-
-	}
 }
