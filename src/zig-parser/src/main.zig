@@ -178,7 +178,7 @@ pub fn main() !void {
 
     const arena_allocator = arena.allocator();
 
-    const mapped_slice = [_]i32{ 1, 2, 3, 4 };
+    const mapped_slice = [_]u8{ '1', '2', '3', '4' };
 
     if (mapped_slice.len > 0) {
         var dummy: u8 = 0;
