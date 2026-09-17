@@ -13,15 +13,15 @@ SUMMARY_FILE="$RESULTS_DIR/master_summary.md"
 SUMMARY_TIME="$RESULTS_DIR/summary_time.md"
 SUMMARY_SYS="$RESULTS_DIR/summary_sys.md"
 SUMMARY_GC="$RESULTS_DIR/summary_gc.md"
-SUMMARY_SMEM="$RESULTS_DIR/summary_smem.md"
+SUMMARY_SMAPS="$RESULTS_DIR/summary_smaps.md"
 
 # Die zu testenden Tags in exakter Reihenfolge
 TAGS=("new-stage1" "new-stage2" "new-stage3")
 
 mkdir -p "$RESULTS_DIR"
 
-# Tool-Abhängigkeiten prüfen
-for cmd in hyperfine python3 /usr/bin/time smem; do
+# Tool-Abhängigkeiten prüfen (smem entfernt)
+for cmd in hyperfine python3 /usr/bin/time; do
     if ! command -v "$cmd" &> /dev/null && [ ! -x "$cmd" ]; then
         echo "Fehler: '$cmd' ist nicht installiert oder nicht im PATH."
         exit 1
@@ -67,13 +67,13 @@ cleanup() {
         echo -e "\n<br>\n" >> "$SUMMARY_FILE"
     fi
 
-    # 5. Smem Speicheranalyse anhängen
-    if [ -f "$SUMMARY_SMEM" ]; then
-        cat "$SUMMARY_SMEM" >> "$SUMMARY_FILE"
+    # 5. Smaps Speicheranalyse anhängen
+    if [ -f "$SUMMARY_SMAPS" ]; then
+        cat "$SUMMARY_SMAPS" >> "$SUMMARY_FILE"
     fi
     
-    # Temporäre Dateien aufräumen (Fehler ignorieren)
-    rm -f "$SUMMARY_TIME" "$SUMMARY_SYS" "$SUMMARY_GC" "$SUMMARY_SMEM" 2>/dev/null || true
+    # Temporäre Dateien aufräumen
+    rm -f "$SUMMARY_TIME" "$SUMMARY_SYS" "$SUMMARY_GC" "$SUMMARY_SMAPS" 2>/dev/null || true
     
     # Git-Zustand wiederherstellen
     git checkout "$ORIGINAL_BRANCH" > /dev/null 2>&1 || true
@@ -106,12 +106,12 @@ Gemessen via \`GODEBUG=gctrace=1\`.
 | :--- | :--- | :--- | :--- | :--- |
 EOF
 
-cat <<EOF > "$SUMMARY_SMEM"
-# 4. Speicheranalyse via smem (Linux)
-Erfasst via \`smem\` (USS = Unique Set Size, PSS = Proportional Set Size, RSS = Resident Set Size).
+cat <<EOF > "$SUMMARY_SMAPS"
+# 4. Speicheranalyse via /proc/[PID]/smaps (Linux)
+Erfasst analog zu Windows VMMap (Werte in Megabyte / MB).
 
-| Stufe / Tag | Sprache | USS (MB) | PSS (MB) | RSS / Total WS (MB) | Swap (MB) |
-| :--- | :--- | :--- | :--- | :--- | :--- |
+| Stufe / Tag | Sprache | Mapped File Size (MB) | Mapped File WS (MB) | Heap WS (MB) | Private Data Size (MB) | Total Working Set (MB) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 EOF
 
 # Hilfsfunktion für Systemmetriken
@@ -159,21 +159,22 @@ with open(summary_sys, 'a') as f:
 END
 }
 
-# Hilfsfunktion für smem Speicheranalyse
-measure_smem_metrics() {
+# Hilfsfunktion für Speicheranalyse via /proc/[PID]/smaps
+measure_smaps_metrics() {
     local LANG_NAME=$1
     local BIN_PATH=$2
     local TAG_NAME=$3
 
-    echo "  > Erfasse smem Speicheranalyse für $LANG_NAME..."
+    echo "  > Erfasse smaps Speicheranalyse für $LANG_NAME..."
 
-    local TMP_SMEM="$RESULTS_DIR/smem_${LANG_NAME}_${TAG_NAME}.txt"
+    # 1. BENCHMARK_PAUSE für die Applikation bereitstellen
+    export BENCHMARK_PAUSE=1
 
-    # 1. Prozess im Hintergrund starten
+    # 2. Prozess im Hintergrund starten
     "$BIN_PATH" "$LOG_FILE" > /dev/null 2>&1 &
     local TARGET_PID=$!
 
-    # 2. Polling: Warten bis der Prozess echten RSS-Speicher zugewiesen hat (max 100ms)
+    # 3. Polling: Warten bis VmRSS > 0 ist (max 100ms)
     local count=0
     while [ $count -lt 100 ]; do
         if [ -d "/proc/$TARGET_PID" ]; then
@@ -186,56 +187,85 @@ measure_smem_metrics() {
         count=$((count + 1))
     done
 
-    # 3. Prozess per SIGSTOP einfrieren
+    # 4. Prozess via SIGSTOP einfrieren
     kill -STOP "$TARGET_PID" 2>/dev/null || true
 
-    # 4. smem für die konkrete PID ausführen (-n: numerische User/PIDs, -k: formatiert Ausgaben in KiB/MiB)
-    smem -P "^${TARGET_PID}$" -c "pid uss pss rss swap" -n > "$TMP_SMEM" 2>/dev/null || true
-
-    # 5. Python-Script parsed die smem-Ausgabe und hängt die Zeile an SUMMARY_SMEM an
-    python3 - "$TMP_SMEM" "$TAG_NAME" "$LANG_NAME" "$SUMMARY_SMEM" <<'END'
+    # 5. Python-Script parsed /proc/[PID]/smaps komplett und schreibt genau EINMAL
+    python3 - "$TARGET_PID" "$TAG_NAME" "$LANG_NAME" "$SUMMARY_SMAPS" "$LOG_FILE" <<'END'
 import sys
 import os
+import re
 
-smem_file = sys.argv[1]
+pid = sys.argv[1]
 tag = sys.argv[2]
 lang = sys.argv[3]
-summary_smem = sys.argv[4]
+summary_smaps = sys.argv[4]
+log_basename = os.path.basename(sys.argv[5])
 
-uss_mb = 0.0
-pss_mb = 0.0
-rss_mb = 0.0
-swap_mb = 0.0
+smaps_path = f"/proc/{pid}/smaps"
 
-if os.path.exists(smem_file):
+mapped_size, mapped_ws = 0.0, 0.0
+heap_ws = 0.0
+private_size, private_ws = 0.0, 0.0
+total_ws = 0.0
+
+if os.path.exists(smaps_path):
     try:
-        with open(smem_file, "r") as f:
-            lines = [line.strip() for line in f if line.strip()]
+        with open(smaps_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
 
-        # smem Ausgabe enthält Header in Zeile 1, Werte in Zeile 2
-        if len(lines) >= 2:
-            parts = lines[1].split()
-            if len(parts) >= 5:
-                # smem Werte sind standardmäßig in KiB
-                uss_mb = float(parts[1]) / 1024.0
-                pss_mb = float(parts[2]) / 1024.0
-                rss_mb = float(parts[3]) / 1024.0
-                swap_mb = float(parts[4]) / 1024.0
+        blocks = content.split("\n\n")
+        for block in blocks:
+            lines = block.split("\n")
+            if not lines or not lines[0]:
+                continue
+            
+            header = lines[0]
+            match_path = re.search(r'/[^\s]+', header)
+            filepath = match_path.group(0) if match_path else ""
+
+            size_kb, rss_kb, priv_dirty_kb, priv_clean_kb = 0, 0, 0, 0
+
+            for line in lines[1:]:
+                if line.startswith("Size:"):
+                    size_kb = int(line.split()[1])
+                elif line.startswith("Rss:"):
+                    rss_kb = int(line.split()[1])
+                elif line.startswith("Private_Dirty:"):
+                    priv_dirty_kb = int(line.split()[1])
+                elif line.startswith("Private_Clean:"):
+                    priv_clean_kb = int(line.split()[1])
+
+            total_ws += rss_kb
+            priv_total = priv_dirty_kb + priv_clean_kb
+            private_ws += priv_total
+            private_size += size_kb
+
+            if "[heap]" in header:
+                heap_ws += rss_kb
+            elif log_basename in filepath or (filepath and not filepath.endswith(".so") and "/bin/" not in filepath and "/lib" not in filepath and "go-parser" not in filepath and "zig-parser" not in filepath):
+                mapped_size += size_kb
+                mapped_ws += rss_kb
+
+        # Fallback bei Zero-Copy Mappings (falls mapped_ws als anonym klassifiziert wurde)
+        if mapped_ws == 0.0 and total_ws > 0.0:
+            mapped_ws = max(0.0, total_ws - heap_ws - private_ws)
+
+        # Erst NACH der Schleife werden die aufsummierten Werte geschrieben
+        out_line = f"| {tag} | {lang} | {mapped_size/1024.0:.1f} | {mapped_ws/1024.0:.1f} | {heap_ws/1024.0:.2f} | {private_size/1024.0:.1f} | {total_ws/1024.0:.1f} |\n"
+        with open(summary_smaps, "a", encoding="utf-8") as f:
+            f.write(out_line)
+
     except Exception as e:
-        print(f"  [smem error] {e}")
+        print(f"  [smaps error] {e}")
 
-out_line = f"| {tag} | {lang} | {uss_mb:.1f} | {pss_mb:.1f} | {rss_mb:.1f} | {swap_mb:.1f} |\n"
-
-with open(summary_smem, "a", encoding="utf-8") as f:
-    f.write(out_line)
 END
 
-    # 6. Prozess wieder aufwecken und beenden
+    # 6. Aufraumen
+    unset BENCHMARK_PAUSE
     kill -CONT "$TARGET_PID" 2>/dev/null || true
     kill -9 "$TARGET_PID" 2>/dev/null || true
     wait "$TARGET_PID" 2>/dev/null || true
-
-    rm -f "$TMP_SMEM" 2>/dev/null || true
 }
 
 # Hilfsfunktion für Go GC Trace Metriken
@@ -297,10 +327,16 @@ for TAG in "${TAGS[@]}"; do
     git checkout --force "$TAG" --quiet
 
     echo "Kompiliere Go-Parser..."
-    (cd "$PROJECT_ROOT/src/go-parser" && go build -o go-parser-artefact main.go)
+    (cd "$PROJECT_ROOT/src/go-parser" && go build -o go-parser-artefact main.go) || {
+        echo "Fehler beim Kompilieren des Go-Parsers!"
+        exit 1
+    }
 
     echo "Kompiliere Zig-Parser..."
-    (cd "$PROJECT_ROOT/src/zig-parser" && zig build-exe src/main.zig -O ReleaseFast --name zig-parser-artefact)
+    (cd "$PROJECT_ROOT/src/zig-parser" && zig build-exe src/main.zig -O ReleaseFast --name zig-parser-artefact) || {
+        echo "Fehler beim Kompilieren des Zig-Parsers!"
+        exit 1
+    }
 
     GO_BIN="$PROJECT_ROOT/src/go-parser/go-parser-artefact"
     ZIG_BIN="$PROJECT_ROOT/src/zig-parser/zig-parser-artefact"
@@ -310,9 +346,9 @@ for TAG in "${TAGS[@]}"; do
     measure_sys_metrics "Go" "$GO_BIN" "$TAG"
     measure_sys_metrics "Zig" "$ZIG_BIN" "$TAG"
     
-    # 2. Memory Mapping via smem erfassen
-    measure_smem_metrics "Go" "$GO_BIN" "$TAG"
-    measure_smem_metrics "Zig" "$ZIG_BIN" "$TAG"
+    # 2. Memory Mapping via /proc/[PID]/smaps erfassen
+    measure_smaps_metrics "Go" "$GO_BIN" "$TAG"
+    measure_smaps_metrics "Zig" "$ZIG_BIN" "$TAG"
 
     # 3. Go GC Trace erfassen
     measure_go_gc "$GO_BIN" "$TAG"
@@ -323,8 +359,8 @@ for TAG in "${TAGS[@]}"; do
       --warmup 3 \
       --runs 10 \
       --export-json "$JSON_OUT" \
-      --command-name "Go ($TAG)" "$GO_BIN $LOG_FILE" \
-      --command-name "Zig ($TAG)" "$ZIG_BIN $LOG_FILE" > /dev/null
+      --command-name "Go ($TAG)" "\"$GO_BIN\" \"$LOG_FILE\"" \
+      --command-name "Zig ($TAG)" "\"$ZIG_BIN\" \"$LOG_FILE\"" > /dev/null
 
     # 5. Hyperfine-Daten aus JSON an SUMMARY_TIME hängen
     python3 - "$JSON_OUT" "$TAG" "$SUMMARY_TIME" <<'END'
