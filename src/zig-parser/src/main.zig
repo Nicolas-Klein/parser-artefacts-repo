@@ -182,7 +182,7 @@ pub fn main() !void {
         defer allocator.free(val);
         if (std.mem.eql(u8, val, "1")) {
             // Exakt 2 Sekunden schlafen (2 * 10^9 Nanosekunden)
-            std.time.sleep(2 * std.time.ns_per_s);
+            std.time.sleep(5 * std.time.ns_per_s);
         }
     } else |_| {}
 
