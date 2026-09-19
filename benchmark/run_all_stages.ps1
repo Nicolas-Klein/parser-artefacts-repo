@@ -121,7 +121,7 @@ function Measure-WinProcessMetrics {
     $avgSys = [math]::Round(($sysCpuList | Measure-Object -Average).Average, 1)
     $avgTotal = [math]::Round(($totalCpuList | Measure-Object -Average).Average, 1)
 
-    "| $TagName | $LangName \vert{}$avgRam | $avgUser \vert{}$avgSys | $avgTotal \vert{}" \vert{} Add-Content -Path $SummarySys
+    "| $TagName | $LangName | $avgRam | $avgUser | $avgSys | $avgTotal | " |  Add-Content -Path $SummarySys
 }
 
 # Hilfsfunktion: Go Garbage Collector Trace erfassen & auswerten
