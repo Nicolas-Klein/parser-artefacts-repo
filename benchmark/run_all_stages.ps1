@@ -151,10 +151,16 @@ function Measure-GoGCTrace {
     # 2. Gemessene Läufe (stderr anhängen)
     $allStderr = ""
     for ($run = 1; $run -le$MeasuredRuns; $run++) {$pinfo = New-Object System.Diagnostics.ProcessStartInfo
-        $pinfo.FileName = $BinPath$pinfo.Arguments = "`"$LogPath`""
-        $pinfo.UseShellExecute = $false$pinfo.RedirectStandardOutput = $true$pinfo.RedirectStandardError = $true$pinfo.EnvironmentVariables["GODEBUG"] = "gctrace=1"
+        $pinfo.FileName = $BinPath
+        $pinfo.Arguments = "`"$LogPath`""
+        $pinfo.UseShellExecute = $false
+        $pinfo.RedirectStandardOutput = $true
+        $pinfo.RedirectStandardError = $true
+        $pinfo.EnvironmentVariables["GODEBUG"] = "gctrace=1"
 
-        $process = [System.Diagnostics.Process]::Start($pinfo)$allStderr += $process.StandardError.ReadToEnd()$process.WaitForExit()
+        $process = [System.Diagnostics.Process]::Start($pinfo)
+        $allStderr += $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
     }
 
     Set-Content -Path $gcLog -Value $allStderr -Encoding utf-8
