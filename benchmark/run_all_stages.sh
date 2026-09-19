@@ -13,7 +13,6 @@ SUMMARY_FILE="$RESULTS_DIR/master_summary.md"
 SUMMARY_TIME="$RESULTS_DIR/summary_time.md"
 SUMMARY_SYS="$RESULTS_DIR/summary_sys.md"
 SUMMARY_GC="$RESULTS_DIR/summary_gc.md"
-SUMMARY_SMAPS="$RESULTS_DIR/summary_smaps.md"
 
 # Die zu testenden Tags in exakter Reihenfolge
 TAGS=("new-stage1" "new-stage2" "new-stage3")
@@ -74,14 +73,9 @@ cleanup() {
         cat "$SUMMARY_GC" >> "$SUMMARY_FILE"
         echo -e "\n<br>\n" >> "$SUMMARY_FILE"
     fi
-
-    # 5. Smaps Speicheranalyse anhängen
-    if [ -f "$SUMMARY_SMAPS" ]; then
-        cat "$SUMMARY_SMAPS" >> "$SUMMARY_FILE"
-    fi
     
     # Temporäre Dateien aufräumen
-    rm -f "$SUMMARY_TIME" "$SUMMARY_SYS" "$SUMMARY_GC" "$SUMMARY_SMAPS" 2>/dev/null || true
+    rm -f "$SUMMARY_TIME" "$SUMMARY_SYS" "$SUMMARY_GC" 2>/dev/null || true
     
     # Git-Zustand wiederherstellen
     git checkout "$ORIGINAL_BRANCH" > /dev/null 2>&1 || true
@@ -114,21 +108,13 @@ Gemessen via \`GODEBUG=gctrace=1\`.
 | :--- | :--- | :--- | :--- | :--- |
 EOF
 
-cat <<EOF > "$SUMMARY_SMAPS"
-# 4. Speicheranalyse via /proc/[PID]/smaps (Linux)
-Erfasst analog zu Windows VMMap (Werte in Megabyte / MB).
-
-| Stufe / Tag | Sprache | Mapped File Size (MB) | Mapped File WS (MB) | Heap WS (MB) | Private Data Size (MB) | Total Working Set (MB) |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-EOF
-
 # Hilfsfunktion für Systemmetriken
 measure_sys_metrics() {
     local LANG_NAME=$1
     local BIN_PATH=$2
     local TAG_NAME=$3
-    local WARMUP_RUNS=2
-    local MEASURED_RUNS=5
+    local WARMUP_RUNS=3
+    local MEASURED_RUNS=10
 
     echo "  > Erfasse Prozess-Metriken für $LANG_NAME ($WARMUP_RUNS Warmups, $MEASURED_RUNS Läufe)..."
 
@@ -185,124 +171,11 @@ END
     rm -f "$TMP_TIME" 2>/dev/null || true
 }
 
-# Hilfsfunktion für Speicheranalyse via /proc/[PID]/smaps
-measure_smaps_metrics() {
-    local LANG_NAME=$1
-    local BIN_PATH=$2
-    local TAG_NAME=$3
-
-    echo "  > Erfasse smaps Speicherlayout für $LANG_NAME..."
-
-    export BENCHMARK_PAUSE=1
-
-    # 1. Prozess im Hintergrund starten
-    "$BIN_PATH" "$LOG_FILE" > /dev/null 2>&1 &
-    local TARGET_PID=$!
-
-    # 2. Synchronisations-Schleife: Warten bis das OS registriert, dass RAM belegt wurde
-    local i=0
-    while [ $i -lt 500 ]; do
-        if [ -f "/proc/$TARGET_PID/status" ]; then
-            # Liest den physisch belegten Speicher (VmRSS)
-            local rss_kb=$(grep -i "VmRSS:" "/proc/$TARGET_PID/status" 2>/dev/null | awk '{print $2}')
-            if [ -n "$rss_kb" ] && [ "$rss_kb" -gt 0 ]; then
-                # RAM ist zugewiesen! Sofort einfrieren
-                kill -STOP "$TARGET_PID" 2>/dev/null || true
-                break
-            fi
-        else
-            # Prozess ist bereits durchgelaufen (sehr schnelle Stufe)
-            break
-        fi
-        sleep 0.001
-        i=$((i + 1))
-    done
-
-    # Falls der Prozess bereits gestoppt war oder nicht erwischt wurde, sicherheitshalber STOP senden
-    kill -STOP "$TARGET_PID" 2>/dev/null || true
-
-    # 3. Python-Skript liest /proc/[PID]/smaps aus und schreibt die Zeile
-    python3 - "$TARGET_PID" "$TAG_NAME" "$LANG_NAME" "$SUMMARY_SMAPS" "$LOG_FILE" <<'END'
-import sys
-import os
-import re
-
-pid = sys.argv[1]
-tag = sys.argv[2]
-lang = sys.argv[3]
-summary_smaps = sys.argv[4]
-log_basename = os.path.basename(sys.argv[5])
-
-smaps_path = f"/proc/{pid}/smaps"
-
-mapped_size, mapped_ws = 0.0, 0.0
-heap_ws = 0.0
-private_size, private_ws = 0.0, 0.0
-total_ws = 0.0
-
-if os.path.exists(smaps_path):
-    try:
-        with open(smaps_path, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-
-        blocks = content.split("\n\n")
-        for block in blocks:
-            lines = block.split("\n")
-            if not lines or not lines[0]:
-                continue
-            
-            header = lines[0]
-            match_path = re.search(r'/[^\s]+', header)
-            filepath = match_path.group(0) if match_path else ""
-
-            size_kb, rss_kb, priv_dirty_kb, priv_clean_kb = 0, 0, 0, 0
-
-            for line in lines[1:]:
-                if line.startswith("Size:"):
-                    size_kb = int(line.split()[1])
-                elif line.startswith("Rss:"):
-                    rss_kb = int(line.split()[1])
-                elif line.startswith("Private_Dirty:"):
-                    priv_dirty_kb = int(line.split()[1])
-                elif line.startswith("Private_Clean:"):
-                    priv_clean_kb = int(line.split()[1])
-
-            total_ws += rss_kb
-            priv_total = priv_dirty_kb + priv_clean_kb
-            private_ws += priv_total
-            private_size += size_kb
-
-            if "[heap]" in header:
-                heap_ws += rss_kb
-            elif log_basename in filepath or (filepath and not filepath.endswith(".so") and "/bin/" not in filepath and "/lib" not in filepath and "go-parser" not in filepath and "zig-parser" not in filepath):
-                mapped_size += size_kb
-                mapped_ws += rss_kb
-
-        # Fallback für Zero-Copy (falls der Kernel die Datei unter anonymem Speicher führt)
-        if mapped_ws == 0.0 and total_ws > 0.0:
-            mapped_ws = max(0.0, total_ws - heap_ws - private_ws)
-
-    except Exception as e:
-        print(f"  [smaps error] {e}")
-
-out_line = f"| {tag} | {lang} | {mapped_size/1024.0:.1f} | {mapped_ws/1024.0:.1f} | {heap_ws/1024.0:.2f} | {private_size/1024.0:.1f} | {total_ws/1024.0:.1f} |\n"
-with open(summary_smaps, "a", encoding="utf-8") as f:
-    f.write(out_line)
-
-END
-
-    # 4. Prozess aufwecken, beenden und Ressourcen freigeben
-    unset BENCHMARK_PAUSE
-    kill -CONT "$TARGET_PID" 2>/dev/null || true
-    kill -9 "$TARGET_PID" 2>/dev/null || true
-    wait "$TARGET_PID" 2>/dev/null || true
-}
-
 measure_go_gc() {
     local BIN_PATH=$1
     local TAG_NAME=$2
-    local WARMUP_RUNS=2
-    local MEASURED_RUNS=5
+    local WARMUP_RUNS=3
+    local MEASURED_RUNS=10
 
     echo "  > Erfasse Go GC-Trace (GODEBUG=gctrace=1) mit $WARMUP_RUNS Warmups und $MEASURED_RUNS Läufen..."
 
@@ -387,15 +260,11 @@ for TAG in "${TAGS[@]}"; do
     # 1. System & Process Metriken erfassen
     measure_sys_metrics "Go" "$GO_BIN" "$TAG"
     measure_sys_metrics "Zig" "$ZIG_BIN" "$TAG"
-    
-    # 2. Memory Mapping via /proc/[PID]/smaps erfassen
-    measure_smaps_metrics "Go" "$GO_BIN" "$TAG"
-    measure_smaps_metrics "Zig" "$ZIG_BIN" "$TAG"
 
-    # 3. Go GC Trace erfassen
+    # 2. Go GC Trace erfassen
     measure_go_gc "$GO_BIN" "$TAG"
 
-    # 4. Hyperfine-Messung
+    # 3. Hyperfine-Messung
     echo "  > Starte Hyperfine..."
     hyperfine \
       --warmup 3 \
@@ -404,7 +273,7 @@ for TAG in "${TAGS[@]}"; do
       --command-name "Go ($TAG)" "\"$GO_BIN\" \"$LOG_FILE\"" \
       --command-name "Zig ($TAG)" "\"$ZIG_BIN\" \"$LOG_FILE\"" > /dev/null
 
-    # 5. Hyperfine-Daten aus JSON an SUMMARY_TIME hängen
+    # 4. Hyperfine-Daten aus JSON an SUMMARY_TIME hängen
     python3 - "$JSON_OUT" "$TAG" "$SUMMARY_TIME" <<'END'
 import sys
 import json
