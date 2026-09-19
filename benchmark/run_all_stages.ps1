@@ -57,46 +57,63 @@ function Measure-WinProcessMetrics {
         [string]$LangName,
         [string]$BinPath,
         [string]$LogPath,
-        [string]$TagName
+        [string]$TagName,
+        [int]$WarmupRuns = 2,         [int]$MeasuredRuns = 5
     )
 
-    Write-Host "  > Erfasse Prozess- & Perfmon-Metriken für $LangName..." -ForegroundColor Yellow
+    Write-Host "  > Erfasse Prozess- & Perfmon-Metriken für $LangName ($WarmupRuns Warmups,$MeasuredRuns Läufe)..." -ForegroundColor Yellow
 
-    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-    $pinfo.FileName = $BinPath
-    $pinfo.Arguments = "`"$LogPath`""
-    $pinfo.UseShellExecute = $false
-    $pinfo.RedirectStandardOutput = $true
-    $pinfo.RedirectStandardError = $true
-
-    $process = [System.Diagnostics.Process]::Start($pinfo)
-    $peakWorkingSet = 0
-
-    while (-not $process.HasExited) {
-        try {
-            $process.Refresh()
-            $currentWorkingSet = $process.WorkingSet64
-            if ($currentWorkingSet -gt $peakWorkingSet) {
-                $peakWorkingSet = $currentWorkingSet
-            }
-        } catch {}
-        Start-Sleep -Milliseconds 10
+    # 1. Warmup-Läufe (ohne Aufzeichnung)
+    for ($i = 1; $i -le$WarmupRuns; $i++) {$pinfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pinfo.FileName = $BinPath$pinfo.Arguments = "`"$LogPath`""
+        $pinfo.UseShellExecute = $false$pinfo.CreateNoWindow = $true$proc = [System.Diagnostics.Process]::Start($pinfo)$proc.WaitForExit()
     }
 
-    $process.WaitForExit()
+    # 2. Gemessene Durchläufe
+    $ramList = @()$userCpuList = @()
+    $sysCpuList = @()$totalCpuList = @()
 
-    try {
-        if ($process.PeakWorkingSet64 -gt $peakWorkingSet) {
-            $peakWorkingSet = $process.PeakWorkingSet64
+    for ($run = 1; $run -le$MeasuredRuns; $run++) {$pinfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pinfo.FileName = $BinPath$pinfo.Arguments = "`"$LogPath`""
+        $pinfo.UseShellExecute =$false
+        $pinfo.RedirectStandardOutput =$true
+        $pinfo.RedirectStandardError =$true
+        $pinfo.CreateNoWindow =$true
+
+        $process = [System.Diagnostics.Process]::Start($pinfo)$peakWorkingSet = 0
+
+        while (-not $process.HasExited) {
+            try {
+                $process.Refresh()
+                $currentWorkingSet =$process.WorkingSet64
+                if ($currentWorkingSet -gt$peakWorkingSet) {
+                    $peakWorkingSet =$currentWorkingSet
+                }
+            } catch {}
+            Start-Sleep -Milliseconds 5
         }
-    } catch {}
 
-    $maxRamMb = [math]::Round($peakWorkingSet / 1MB, 2)
-    $userCpuMs = [math]::Round($process.UserProcessorTime.TotalMilliseconds, 1)
-    $sysCpuMs = [math]::Round($process.PrivilegedProcessorTime.TotalMilliseconds, 1)
-    $totalCpuMs = [math]::Round($process.TotalProcessorTime.TotalMilliseconds, 1)
+        $process.WaitForExit()
 
-    "| $TagName | $LangName | $maxRamMb | $userCpuMs | $sysCpuMs | $totalCpuMs |" | Add-Content -Path $SummarySys
+        try {
+            if ($process.PeakWorkingSet64 -gt$peakWorkingSet) {
+                $peakWorkingSet =$process.PeakWorkingSet64
+            }
+        } catch {}
+
+        $ramList += ($peakWorkingSet / 1MB)
+        $userCpuList +=$process.UserProcessorTime.TotalMilliseconds
+        $sysCpuList +=$process.PrivilegedProcessorTime.TotalMilliseconds
+        $totalCpuList +=$process.TotalProcessorTime.TotalMilliseconds
+    }
+
+    # 3. Mittelwerte berechnen
+    $avgRam = [math]::Round(($ramList | Measure-Object -Average).Average, 2)
+    $avgUser = [math]::Round(($userCpuList | Measure-Object -Average).Average, 1)
+    $avgSys = [math]::Round(($sysCpuList | Measure-Object -Average).Average, 1)
+    $avgTotal = [math]::Round(($totalCpuList | Measure-Object -Average).Average, 1)
+
+    "| $TagName | $LangName \vert{}$avgRam | $avgUser \vert{}$avgSys | $avgTotal \vert{}" \vert{} Add-Content -Path $SummarySys
 }
 
 # Hilfsfunktion: Go Garbage Collector Trace erfassen & auswerten
@@ -104,39 +121,43 @@ function Measure-GoGCTrace {
     param (
         [string]$BinPath,
         [string]$LogPath,
-        [string]$TagName
+        [string]$TagName,
+        [int]$WarmupRuns = 2,         [int]$MeasuredRuns = 5
     )
 
-    Write-Host "  > Erfasse Go GC-Trace (GODEBUG=gctrace=1)..." -ForegroundColor Yellow
+    Write-Host "  > Erfasse Go GC-Trace ($WarmupRuns Warmups,$MeasuredRuns Läufe)..." -ForegroundColor Yellow
 
     $gcLog = "$ResultsDir\gc_${TagName}.log"
+    Remove-Item $gcLog -ErrorAction SilentlyContinue
 
-    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-    $pinfo.FileName = $BinPath
-    $pinfo.Arguments = "`"$LogPath`""
-    
-    $pinfo.UseShellExecute = $false
-    $pinfo.RedirectStandardOutput = $true
-    $pinfo.RedirectStandardError = $true
-    $pinfo.EnvironmentVariables["GODEBUG"] = "gctrace=1"
+    # 1. Warmup-Läufe
+    for ($i = 1; $i -le$WarmupRuns; $i++) {$pinfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pinfo.FileName = $BinPath$pinfo.Arguments = "`"$LogPath`""
+        $pinfo.UseShellExecute = $false$pinfo.CreateNoWindow = $true$proc = [System.Diagnostics.Process]::Start($pinfo)$proc.WaitForExit()
+    }
 
-    $process = [System.Diagnostics.Process]::Start($pinfo)
-    $stderr = $process.StandardError.ReadToEnd()
-    $process.WaitForExit()
+    # 2. Gemessene Läufe (stderr anhängen)
+    $allStderr = ""
+    for ($run = 1; $run -le$MeasuredRuns; $run++) {$pinfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pinfo.FileName = $BinPath$pinfo.Arguments = "`"$LogPath`""
+        $pinfo.UseShellExecute = $false$pinfo.RedirectStandardOutput = $true$pinfo.RedirectStandardError = $true$pinfo.EnvironmentVariables["GODEBUG"] = "gctrace=1"
 
-    # GC-Output auf Festplatte schreiben
-    Set-Content -Path $gcLog -Value $stderr -Encoding utf-8
+        $process = [System.Diagnostics.Process]::Start($pinfo)$allStderr += $process.StandardError.ReadToEnd()$process.WaitForExit()
+    }
 
-    # Pfade für Python aufbereiten
+    Set-Content -Path $gcLog -Value$allStderr -Encoding utf-8
+
     $gcLogPy =$gcLog.Replace('\', '/')
     $SummaryGCPy =$SummaryGC.Replace('\', '/')
 
+    # 3. Python berechnet den Durchschnitt über alle Runs
     $PyExtractGC = @"
 import re
 
 gc_log = '$gcLogPy'
 tag = '$TagName'
 summary_file = '$SummaryGCPy'
+runs = $MeasuredRuns
 
 gc_count = 0
 total_clock_ms = 0.0
@@ -158,10 +179,12 @@ try:
 except Exception as e:
     print(f"  [Python Error processing GC Trace] {e}")
 
-avg_pause = round(total_clock_ms / gc_count, 3) if gc_count > 0 else 0.0
-total_clock_ms = round(total_clock_ms, 2)
+# Durch die Anzahl der Messläufe teilen, um Durchschnitt pro Durchlauf zu erhalten
+avg_gc_runs_per_execution = round(gc_count / runs, 1) if runs > 0 else 0
+avg_total_pause_per_execution = round(total_clock_ms / runs, 2) if runs > 0 else 0.0
+avg_pause_per_run = round(total_clock_ms / gc_count, 3) if gc_count > 0 else 0.0
 
-out_line = f"| {tag} | {gc_count} | {total_clock_ms} | {avg_pause} | {max_heap_mb:.2f} |\n"
+out_line = f"| {tag} | {avg_gc_runs_per_execution} | {avg_total_pause_per_execution} | {avg_pause_per_run} | {max_heap_mb:.2f} |\n"
 
 with open(summary_file, 'a', encoding='utf-8') as f:
     f.write(out_line)
