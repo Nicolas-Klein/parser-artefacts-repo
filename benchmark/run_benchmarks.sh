@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-LOG_FILE="$PROJECT_ROOT/generator/benchmark_large.log"
+LOG_FILE="$PROJECT_ROOT/benchmark_large.log"
 GO_DIR="$PROJECT_ROOT/src/go-parser"
 ZIG_DIR="$PROJECT_ROOT/src/zig-parser"
 
