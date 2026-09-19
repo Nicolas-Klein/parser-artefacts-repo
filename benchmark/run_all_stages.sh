@@ -127,47 +127,64 @@ measure_sys_metrics() {
     local LANG_NAME=$1
     local BIN_PATH=$2
     local TAG_NAME=$3
+    local WARMUP_RUNS=2
+    local MEASURED_RUNS=5
 
-    echo "  > Erfasse Prozess-Metriken (User/Kernel CPU Time & RAM) für $LANG_NAME..."
+    echo "  > Erfasse Prozess-Metriken für $LANG_NAME ($WARMUP_RUNS Warmups, $MEASURED_RUNS Läufe)..."
 
     local TMP_TIME="$RESULTS_DIR/time_${LANG_NAME}_${TAG_NAME}.txt"
+    : > "$TMP_TIME" # Datei leeren
 
-    /usr/bin/time -v "$BIN_PATH" "$LOG_FILE" > /dev/null 2> "$TMP_TIME"
-    
-    python3 - "$TMP_TIME" "$TAG_NAME" "$LANG_NAME" "$SUMMARY_SYS" <<'END'
+    # 1. Warmup-Läufe (ohne Aufzeichnung)
+    for ((i=1; i<=WARMUP_RUNS; i++)); do
+        "$BIN_PATH" "$LOG_FILE" > /dev/null 2>&1
+    done
+
+    # 2. Gemessene Läufe (Ausgabe an TMP_TIME anhängen)
+    for ((i=1; i<=MEASURED_RUNS; i++)); do
+        /usr/bin/time -v "$BIN_PATH" "$LOG_FILE" > /dev/null 2>> "$TMP_TIME"
+    done
+
+    # 3. Python-Auswertung: Summiert alle Läufe auf und berechnet den Durchschnitt
+    python3 - "$TMP_TIME" "$TAG_NAME" "$LANG_NAME" "$SUMMARY_SYS" "$MEASURED_RUNS" <<'END'
 import sys
 
 time_file = sys.argv[1]
 tag = sys.argv[2]
 lang = sys.argv[3]
 summary_sys = sys.argv[4]
+runs = float(sys.argv[5])
 
-user_sec = 0.0
-sys_sec = 0.0
-max_ram_kb = 0.0
+total_user_sec = 0.0
+total_sys_sec = 0.0
+max_ram_kb_list = []
 
 with open(time_file) as f:
     for line in f:
         if "User time (seconds):" in line:
-            user_sec = float(line.split(":")[-1].strip())
+            total_user_sec += float(line.split(":")[-1].strip())
         elif "System time (seconds):" in line:
-            sys_sec = float(line.split(":")[-1].strip())
+            total_sys_sec += float(line.split(":")[-1].strip())
         elif "Maximum resident set size" in line:
-            max_ram_kb = float(line.split(":")[-1].strip())
+            max_ram_kb_list.append(float(line.split(":")[-1].strip()))
 
-user_ms = round(user_sec * 1000, 1)
-kernel_ms = round(sys_sec * 1000, 1)
-total_cpu_ms = round(user_ms + kernel_ms, 1)
-max_ram_mb = round(max_ram_kb / 1024, 2)
+# Durschnitte berechnen
+avg_user_ms = round((total_user_sec / runs) * 1000, 1)
+avg_kernel_ms = round((total_sys_sec / runs) * 1000, 1)
+avg_total_cpu_ms = round(avg_user_ms + avg_kernel_ms, 1)
 
-out_line = f"| {tag} | {lang} | {max_ram_mb} | {user_ms} | {kernel_ms} | {total_cpu_ms} |\n"
+# Peak RAM ist der Maximalwert über alle Läufe (oder der Durchschnitt, hier Peak Max)
+peak_ram_mb = round(max(max_ram_kb_list) / 1024, 2) if max_ram_kb_list else 0.0
+
+out_line = f"| {tag} | {lang} | {peak_ram_mb} | {avg_user_ms} | {avg_kernel_ms} | {avg_total_cpu_ms} |\n"
 
 with open(summary_sys, 'a') as f:
     f.write(out_line)
 END
+
+    rm -f "$TMP_TIME" 2>/dev/null || true
 }
 
-# Hilfsfunktion für Speicheranalyse via /proc/[PID]/smaps
 # Hilfsfunktion für Speicheranalyse via /proc/[PID]/smaps
 measure_smaps_metrics() {
     local LANG_NAME=$1
@@ -281,24 +298,35 @@ END
     wait "$TARGET_PID" 2>/dev/null || true
 }
 
-# Hilfsfunktion für Go GC Trace Metriken
 measure_go_gc() {
     local BIN_PATH=$1
     local TAG_NAME=$2
+    local WARMUP_RUNS=2
+    local MEASURED_RUNS=5
 
-    echo "  > Erfasse Go GC-Trace (GODEBUG=gctrace=1)..."
+    echo "  > Erfasse Go GC-Trace (GODEBUG=gctrace=1) mit $WARMUP_RUNS Warmups und $MEASURED_RUNS Läufen..."
 
     local GC_LOG="$RESULTS_DIR/gc_${TAG_NAME}.log"
+    : > "$GC_LOG"
 
-    GODEBUG=gctrace=1 "$BIN_PATH" "$LOG_FILE" > /dev/null 2> "$GC_LOG"
+    # Warmups
+    for ((i=1; i<=WARMUP_RUNS; i++)); do
+        "$BIN_PATH" "$LOG_FILE" > /dev/null 2>&1
+    done
 
-    python3 - "$GC_LOG" "$TAG_NAME" "$SUMMARY_GC" <<'END'
+    # Gemessene Läufe
+    for ((i=1; i<=MEASURED_RUNS; i++)); do
+        GODEBUG=gctrace=1 "$BIN_PATH" "$LOG_FILE" > /dev/null 2>> "$GC_LOG"
+    done
+
+    python3 - "$GC_LOG" "$TAG_NAME" "$SUMMARY_GC" "$MEASURED_RUNS" <<'END'
 import sys
 import re
 
 gc_log = sys.argv[1]
 tag = sys.argv[2]
 summary_gc = sys.argv[3]
+runs = int(sys.argv[4])
 
 gc_count = 0
 total_clock_ms = 0.0
@@ -320,10 +348,11 @@ try:
 except Exception:
     pass
 
-avg_pause = round(total_clock_ms / gc_count, 3) if gc_count > 0 else 0.0
-total_clock_ms = round(total_clock_ms, 2)
+avg_gc_runs = round(gc_count / runs, 1) if runs > 0 else 0
+avg_total_pause = round(total_clock_ms / runs, 2) if runs > 0 else 0.0
+avg_pause_per_run = round(total_clock_ms / gc_count, 3) if gc_count > 0 else 0.0
 
-out_line = f"| {tag} | {gc_count} | {total_clock_ms} | {avg_pause} | {max_heap_mb:.2f} |\n"
+out_line = f"| {tag} | {avg_gc_runs} | {avg_total_pause} | {avg_pause_per_run} | {max_heap_mb:.2f} |\n"
 
 with open(summary_gc, 'a') as f:
     f.write(out_line)
