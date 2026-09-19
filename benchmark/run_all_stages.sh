@@ -5,7 +5,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-LOG_FILE="$PROJECT_ROOT/generator/benchmark_large.log"
+LOG_FILE="$PROJECT_ROOT/benchmark_large.log"
 RESULTS_DIR="$SCRIPT_DIR/results"
 SUMMARY_FILE="$RESULTS_DIR/master_summary.md"
 
@@ -29,8 +29,16 @@ for cmd in hyperfine python3 /usr/bin/time; do
 done
 
 if [ ! -f "$LOG_FILE" ]; then
-    echo "Fehler: Benchmark-Logfile unter $LOG_FILE nicht gefunden!"
-    exit 1
+    echo -e "\033[0;31mFehler: Log-Datei unter '$LOG_FILE' nicht gefunden! Generiere neue Datei\033[0m"
+    
+    python3 "$PROJECT_ROOT/generator/data_generator.py" "$LOG_FILE"
+    
+    if [ ! -f "$LOG_FILE" ]; then
+        echo -e "\033[0;31mFehler: Log-Datei konnte nicht automatisch generiert werden!\033[0m"
+        exit 1
+    fi
+    
+    echo -e "\033[0;32m  > Log-Datei erfolgreich erstellt.\033[0m"
 fi
 
 echo "=================================================="
