@@ -8,7 +8,7 @@ $SummaryFile = "$ResultsDir\master_summary-windows.md"
 
 $SummaryTime = "$ResultsDir\summary_time_win.md"
 $SummarySys = "$ResultsDir\summary_sys_win.md"
-$SummaryVMMap = "$ResultsDir\summary_vmmap_win.md"
+$SummaryGC    = "$ResultsDir\summary_gc_win.md"
 $SummaryVMMap = "$ResultsDir\summary_vmmap_win.md"
 
 $Tags = @("new-stage1-windows", "new-stage2-windows", "new-stage3-windows")
