@@ -108,7 +108,10 @@ function Measure-GoGCTrace {
     $pinfo.FileName = $BinPath
     $pinfo.Arguments = "`"$LogPath`""
     
-    $pinfo.UseShellExecute = $false$pinfo.RedirectStandardOutput = $true$pinfo.RedirectStandardError = $true$pinfo.EnvironmentVariables["GODEBUG"] = "gctrace=1"
+    $pinfo.UseShellExecute = $false
+    $pinfo.RedirectStandardOutput = $true
+    $pinfo.RedirectStandardError = $true
+    $pinfo.EnvironmentVariables["GODEBUG"] = "gctrace=1"
 
     $process = [System.Diagnostics.Process]::Start($pinfo)$stderr = $process.StandardError.ReadToEnd()$process.WaitForExit()
 
