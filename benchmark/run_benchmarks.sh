@@ -40,8 +40,16 @@ echo ""
 
 # 3. Prüfen ob Logdatei existiert
 if [ ! -f "$LOG_FILE" ]; then
-    echo "Fehler: Logdatei nicht gefunden unter: $LOG_FILE"
-    exit 1
+    echo -e "\033[0;31mFehler: Log-Datei unter '$LOG_FILE' nicht gefunden! Generiere neue Datei\033[0m"
+    
+    python3 "$PROJECT_ROOT/generator/data_generator.py" "$LOG_FILE"
+    
+    if [ ! -f "$LOG_FILE" ]; then
+        echo -e "\033[0;31mFehler: Log-Datei konnte nicht automatisch generiert werden!\033[0m"
+        exit 1
+    fi
+    
+    echo -e "\033[0;32m  > Log-Datei erfolgreich erstellt.\033[0m"
 fi
 
 echo "Verwendete Binärdateien:"
