@@ -118,7 +118,7 @@ function Measure-GoGCTrace {
     $process.WaitForExit()
 
     # GC-Output auf Festplatte schreiben
-    Set-Content -Path $gcLog -Value$stderr -Encoding utf-8
+    Set-Content -Path $gcLog -Value $stderr -Encoding utf-8
 
     # Pfade für Python aufbereiten
     $gcLogPy =$gcLog.Replace('\', '/')
