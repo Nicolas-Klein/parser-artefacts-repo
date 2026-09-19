@@ -113,7 +113,9 @@ function Measure-GoGCTrace {
     $pinfo.RedirectStandardError = $true
     $pinfo.EnvironmentVariables["GODEBUG"] = "gctrace=1"
 
-    $process = [System.Diagnostics.Process]::Start($pinfo)$stderr = $process.StandardError.ReadToEnd()$process.WaitForExit()
+    $process = [System.Diagnostics.Process]::Start($pinfo)
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
 
     # GC-Output auf Festplatte schreiben
     Set-Content -Path $gcLog -Value$stderr -Encoding utf-8
