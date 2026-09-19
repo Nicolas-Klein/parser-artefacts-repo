@@ -9,6 +9,7 @@ $SummaryFile = "$ResultsDir\master_summary-windows.md"
 $SummaryTime = "$ResultsDir\summary_time_win.md"
 $SummarySys = "$ResultsDir\summary_sys_win.md"
 $SummaryVMMap = "$ResultsDir\summary_vmmap_win.md"
+$SummaryVMMap = "$ResultsDir\summary_vmmap_win.md"
 
 $Tags = @("new-stage1-windows", "new-stage2-windows", "new-stage3-windows")
 
@@ -89,6 +90,70 @@ function Measure-WinProcessMetrics {
     $totalCpuMs = [math]::Round($process.TotalProcessorTime.TotalMilliseconds, 1)
 
     "| $TagName | $LangName | $maxRamMb | $userCpuMs | $sysCpuMs | $totalCpuMs |" | Add-Content -Path $SummarySys
+}
+
+# Hilfsfunktion: Go Garbage Collector Trace erfassen & auswerten
+function Measure-GoGCTrace {
+    param (
+        [string]$BinPath,
+        [string]$LogPath,
+        [string]$TagName
+    )
+
+    Write-Host "  > Erfasse Go GC-Trace (GODEBUG=gctrace=1)..." -ForegroundColor Yellow
+
+    $gcLog = "$ResultsDir\gc_${TagName}.log"
+
+    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
+    $pinfo.FileName = $BinPath$pinfo.Arguments = "`"$LogPath`""
+    $pinfo.UseShellExecute = $false$pinfo.RedirectStandardOutput = $true$pinfo.RedirectStandardError = $true$pinfo.EnvironmentVariables["GODEBUG"] = "gctrace=1"
+
+    $process = [System.Diagnostics.Process]::Start($pinfo)$stderr = $process.StandardError.ReadToEnd()$process.WaitForExit()
+
+    # GC-Output auf Festplatte schreiben
+    Set-Content -Path $gcLog -Value$stderr -Encoding utf-8
+
+    # Pfade für Python aufbereiten
+    $gcLogPy =$gcLog.Replace('\', '/')
+    $SummaryGCPy =$SummaryGC.Replace('\', '/')
+
+    $PyExtractGC = @"
+import re
+
+gc_log = '$gcLogPy'
+tag = '$TagName'
+summary_file = '$SummaryGCPy'
+
+gc_count = 0
+total_clock_ms = 0.0
+max_heap_mb = 0.0
+
+pattern = re.compile(r'gc (\d+).*?: ([\d\.\+]+) ms clock, ([\d\.\+/]+) ms cpu, (\d+)->(\d+)->(\d+) MB')
+
+try:
+    with open(gc_log, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            match = pattern.search(line)
+            if match:
+                gc_count += 1
+                clock_parts = [float(x) for x in match.group(2).split('+')]
+                total_clock_ms += sum(clock_parts)
+                heap_before = float(match.group(4))
+                if heap_before > max_heap_mb:
+                    max_heap_mb = heap_before
+except Exception as e:
+    print(f"  [Python Error processing GC Trace] {e}")
+
+avg_pause = round(total_clock_ms / gc_count, 3) if gc_count > 0 else 0.0
+total_clock_ms = round(total_clock_ms, 2)
+
+out_line = f"| {tag} | {gc_count} | {total_clock_ms} | {avg_pause} | {max_heap_mb:.2f} |\n"
+
+with open(summary_file, 'a', encoding='utf-8') as f:
+    f.write(out_line)
+"@
+
+    python -c "$PyExtractGC"
 }
 
 function Measure-VMMapMetrics {
@@ -226,7 +291,9 @@ try {
 
     "# 2. System- & Perfmon-Metriken (Windows)`nGemessen via Win32 Process API & System Diagnostics.`n`n| Stufe / Tag | Sprache | Max RAM / Peak Working Set (MB) | User CPU Time (ms) | Kernel/System CPU Time (ms) | Total CPU Time (ms) |`n| :--- | :--- | :--- | :--- | :--- | :--- |" | Set-Content -Path $SummarySys
 
-    "# 3. Speicheranalyse via VMMap (Windows)`nErfasst über Sysinternals VMMap CLI (Werte in Megabyte / MB).`n`n| Stufe / Tag | Sprache | Mapped File Size (MB) | Mapped File WS (MB) | Heap WS (MB) | Private Data Size (MB) | Total Working Set (MB) |`n| :--- | :--- | :--- | :--- | :--- | :--- | :--- |" | Set-Content -Path $SummaryVMMap
+    "# 3. Go Garbage Collector Auswertung (GCTRACE)`nGemessen via ``GODEBUG=gctrace=1``.`n`n| Stufe / Tag | GC Runs (Anzahl) | Total GC Pause (ms) | Avg GC Pause / Run (ms) | Peak Heap before GC (MB) |`n| :--- | :--- | :--- | :--- | :--- |" | Set-Content -Path $SummaryGC
+
+    "# 4. Speicheranalyse via VMMap (Windows)`nErfasst über Sysinternals VMMap CLI (Werte in Megabyte / MB).`n`n| Stufe / Tag | Sprache | Mapped File Size (MB) | Mapped File WS (MB) | Heap WS (MB) | Private Data Size (MB) | Total Working Set (MB) |`n| :--- | :--- | :--- | :--- | :--- | :--- | :--- |" | Set-Content -Path $SummaryVMMap
 
     foreach ($Tag in $Tags) {
         Write-Host "`n--------------------------------------------------" -ForegroundColor Cyan
@@ -256,11 +323,14 @@ try {
         Measure-VMMapMetrics -LangName "Go" -BinPath $GoBin -LogPath $LogFile -TagName $Tag
         Measure-VMMapMetrics -LangName "Zig" -BinPath $ZigBin -LogPath $LogFile -TagName $Tag
 
-        # C) Hyperfine für präzise Gesamtlaufzeit ausführen
+        # C) Go GC Trace erfassen
+        Measure-GoGCTrace -BinPath $GoBin -LogPath $LogFile -TagName$Tag
+
+        # D) Hyperfine für präzise Gesamtlaufzeit ausführen
         Write-Host "  > Starte Hyperfine..." -ForegroundColor Yellow
         hyperfine --warmup 3 --runs 10 --export-json "$JsonOut" --command-name "Go ($Tag)" "$GoBin `"$LogFile`"" --command-name "Zig ($Tag)" "$ZigBin `"$LogFile`"" | Out-Null
 
-        # D) JSON-Ergebnisse an die Laufzeit-Tabelle anhängen
+        # E) JSON-Ergebnisse an die Laufzeit-Tabelle anhängen
         $SummaryTimePy = $SummaryTime.Replace('\', '/')
         $JsonOutPy = $JsonOut.Replace('\', '/')
         $PyScript = @"
@@ -307,8 +377,15 @@ finally {
         "`n<br>`n" | Add-Content -Path $SummaryFile
         Remove-Item $SummarySys -ErrorAction SilentlyContinue
     }
+    
+    # 3. GC Trace Tabelle anhängen
+    if (Test-Path $SummaryGC) {
+        Get-Content $SummaryGC | Add-Content -Path $SummaryFile
+        "`n<br>`n" | Add-Content -Path $SummaryFile
+        Remove-Item $SummaryGC -ErrorAction SilentlyContinue
+    }
 
-    # 3. VMMap-Tabelle anhängen
+    # 4. VMMap-Tabelle anhängen
     if (Test-Path $SummaryVMMap) {
         Get-Content $SummaryVMMap | Add-Content -Path $SummaryFile
         Remove-Item $SummaryVMMap -ErrorAction SilentlyContinue
