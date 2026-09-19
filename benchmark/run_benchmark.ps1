@@ -13,8 +13,15 @@ New-Item -ItemType Directory -Force -Path $ResultsDir | Out-Null
 
 # Prüfen, ob Log-Datei existiert
 if (-not (Test-Path $LogFile)) {
-    Write-Host "Fehler: Log-Datei unter '$LogFile' nicht gefunden!" -ForegroundColor Red
-    exit 1
+    Write-Host "Fehler: Log-Datei unter '$LogFile' nicht gefunden! Generiere neue Datei" -ForegroundColor Red
+    python "$ProjectRoot\generator\data_generator.py" "$LogFile"
+    
+    if (-not (Test-Path $LogFile)) {
+        Write-Host "Fehler: Log-Datei konnte nicht automatisch generiert werden!" -ForegroundColor Red
+        exit 1
+    }
+    
+    Write-Host "  > Log-Datei erfolgreich erstellt." -ForegroundColor Green
 }
 
 # Prüfen, ob hyperfine installiert ist
