@@ -5,6 +5,9 @@
 *.csv
 !benchmarks/results/*.csv  # Ausnahmen: Messergebnisse/Statistiken dürfen rein!
 data/
+benchmark/results
+*.png
+*.pdf
 
 # ------------------------------------------------------------------------------
 # Go
@@ -25,6 +28,8 @@ data/
 /src/zig-parser/src/root.zig
 /src/zig-parser/zig-parser-artefact.o
 /src/zig-parser/zig-parser-artefact
+/src/zig-parser/zig-parser-artefact.pdb
+/src/zig-parser/zig-parser-artefact.exe.obj
 
 
 # ------------------------------------------------------------------------------
@@ -34,6 +39,7 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+generate_scalability_chart.py
 
 # ------------------------------------------------------------------------------
 # Betriebssystem & IDEs
