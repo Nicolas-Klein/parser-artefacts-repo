@@ -5,6 +5,7 @@
 *.csv
 !benchmarks/results/*.csv  # Ausnahmen: Messergebnisse/Statistiken dürfen rein!
 data/
+benchmark/results
 
 # ------------------------------------------------------------------------------
 # Go

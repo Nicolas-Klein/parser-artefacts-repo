@@ -64,7 +64,6 @@ func parseLine(line []byte, entry *LogEntry) error {
 	suffix := line[lastQuote+1:]
 
 	// 1. Prefix manuell parsen (RemoteHost, Identity, User, Timestamp)
-	// Trennung nach Leerzeichen ohne strings.Fields (Allokationsfrei)
 	idx := 0
 
 	// RemoteHost
@@ -233,8 +232,6 @@ func main() {
 	}
 
 	if *profileFlag {
-		// Tipp: Garbage Collector kurz vor dem Heap-Snapshot steuern oder
-		// während des Parsings allozierten Gesamtspeicher auslesen
 		fm, _ := os.Create("mem.prof")
 		defer fm.Close()
 		pprof.WriteHeapProfile(fm)
