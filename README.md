@@ -20,7 +20,9 @@ Um die Umgebung lokal auszuführen, werden folgende Tools benötigt:
 ## Ausführung
 Um die Benchmarks auszuführen muss zu erst der passende Tag geclont werden.
 
-**Linux** ```git clone --branch new-stage3 https://github.com/Nicolas-Klein/parser-artefacts-repo.git```
+**Linux** ```sh 
+git clone --branch new-stage3 https://github.com/Nicolas-Klein/parser-artefacts-repo.git
+```
 
 **Windows** ```git clone --branch new-stage3-windows https://github.com/Nicolas-Klein/parser-artefacts-repo.git```
 
