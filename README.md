@@ -20,5 +20,15 @@ Um die Umgebung lokal auszuführen, werden folgende Tools benötigt:
 ## Ausführung
 Um die Benchmarks auszuführen muss zu erst der passende Tag geclont werden.
 
-**Linux**
-**Windows**
+**Linux** ```git clone --depth 1 --branch new-stage3 https://github.com/Nicolas-Klein/parser-artefacts-repo.git```
+**Windows** ```git clone --depth 1 --branch new-stage3-windows https://github.com/Nicolas-Klein/parser-artefacts-repo.git```
+
+Nachdem Clonen des Repos können folgende Skripts je nach Betriebssystem ausgeführt werden: 
+
+**Linux** ```benchmark/run_all_stages.sh```
+**Windows** ```.\benchmark\run_all_stages.ps1```
+
+Das Ausführen der Skripts, führt automatisch das Benchmarking für die drei Implementierungsstufen durch. Die Ergebnisse werden in der Datei master_summary.md ausgegeben. 
+
+
+Bei der Erstellung der Dateien dieses Repos wurde KI verwendet, zum Debuggen und finden und beheben von Logik Fehlern. 
