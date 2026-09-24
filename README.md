@@ -26,6 +26,8 @@ Um die Benchmarks auszuführen muss zu erst der passende Tag geclont werden.
 
 Nachdem Clonen des Repos können folgende Skripts je nach Betriebssystem ausgeführt werden: 
 
+```cd parser-artefacts-repo/```
+
 **Linux** ```benchmark/run_all_stages.sh```
 
 **Windows** ```.\benchmark\run_all_stages.ps1```
