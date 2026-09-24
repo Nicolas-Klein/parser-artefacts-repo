@@ -13,7 +13,6 @@ SUMMARY_FILE="$RESULTS_DIR/master_summary.md"
 SUMMARY_TIME="$RESULTS_DIR/summary_time.md"
 SUMMARY_SYS="$RESULTS_DIR/summary_sys.md"
 SUMMARY_GC="$RESULTS_DIR/summary_gc.md"
-SUMMARY_PMAP="$RESULTS_DIR/summary_pmap.md"
 
 # Die zu testenden Tags in exakter Reihenfolge
 TAGS=("new-stage1" "new-stage2" "new-stage3")
@@ -21,7 +20,7 @@ TAGS=("new-stage1" "new-stage2" "new-stage3")
 mkdir -p "$RESULTS_DIR"
 
 # Tool-Abhängigkeiten prüfen
-for cmd in hyperfine python3 /usr/bin/time pmap; do
+for cmd in hyperfine python3 /usr/bin/time ; do
     if ! command -v "$cmd" &> /dev/null && [ ! -x "$cmd" ]; then
         echo "Fehler: '$cmd' ist nicht installiert oder nicht im PATH."
         exit 1
@@ -46,17 +45,15 @@ cleanup() {
     echo ""
     echo "Füge Tabellen zusammen und kehre zum Branch zurück..."
     
-    # Füge Laufzeit, System-Metriken, GC und Pmap in einer Datei zusammen
+    # Füge Laufzeit, System-Metriken, GC in einer Datei zusammen
     cat "$SUMMARY_TIME" > "$SUMMARY_FILE"
     echo -e "\n<br>\n" >> "$SUMMARY_FILE"
     cat "$SUMMARY_SYS" >> "$SUMMARY_FILE"
     echo -e "\n<br>\n" >> "$SUMMARY_FILE"
     cat "$SUMMARY_GC" >> "$SUMMARY_FILE"
-    echo -e "\n<br>\n" >> "$SUMMARY_FILE"
-    [ -f "$SUMMARY_PMAP" ] && cat "$SUMMARY_PMAP" >> "$SUMMARY_FILE"
     
     # Aufräumen der temporären Dateien
-    rm -f "$SUMMARY_TIME" "$SUMMARY_SYS" "$SUMMARY_GC" "$SUMMARY_PMAP"
+    rm -f "$SUMMARY_TIME" "$SUMMARY_SYS" "$SUMMARY_GC"
     
     git checkout "$ORIGINAL_BRANCH" > /dev/null 2>&1 || true
     git stash pop > /dev/null 2>&1 || true
@@ -86,14 +83,6 @@ Gemessen via \`GODEBUG=gctrace=1\`.
 
 | Stufe / Tag | GC Runs (Anzahl) | Total GC Pause (ms) | Avg GC Pause / Run (ms) | Peak Heap before GC (MB) |
 | :--- | :--- | :--- | :--- | :--- |
-EOF
-
-cat <<EOF > "$SUMMARY_PMAP"
-# 4. Speicheranalyse via pmap / smaps (Linux)
-Erfasst via \`/proc/[PID]/smaps\` (Werte in Megabyte / MB).
-
-| Stufe / Tag | Sprache | Mapped File Size (MB) | Mapped File WS (MB) | Heap WS (MB) | Private Data Size (MB) | Total Working Set (MB) |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 EOF
 
 # Hilfsfunktion für Systemmetriken
@@ -139,122 +128,6 @@ out_line = f"| {tag} | {lang} | {max_ram_mb} | {user_ms} | {kernel_ms} | {total_
 with open(summary_sys, 'a') as f:
     f.write(out_line)
 END
-}
-
-measure_pmap_metrics() {
-    local LANG_NAME=$1
-    local BIN_PATH=$2
-    local TAG_NAME=$3
-
-    echo "  > Erfasse pmap / smaps Speicherlayout für $LANG_NAME..."
-
-    local INPUT_LOG="$LOG_FILE"
-    local TEMP_LOG_CREATED=false
-
-    # Exklusiv für Stufe 3 erstellen wir ein skaliertes Log-File (10-fach),
-    # damit die Ausführungszeit ausreicht, um /proc/smaps auszulesen.
-    if [[ "$TAG_NAME" == *"stage3"* ]]; then
-        INPUT_LOG="$RESULTS_DIR/temp_large_linux_pmap.log"
-        if [ ! -f "$INPUT_LOG" ]; then
-            echo "    [pmap] Erstelle skaliertes Log-File für Stufe 3..."
-            cat "$LOG_FILE" > "$INPUT_LOG"
-            for i in {1..10}; do cat "$LOG_FILE" >> "$INPUT_LOG"; done
-        fi
-        TEMP_LOG_CREATED=true
-    fi
-
-    # 1. Prozess im Hintergrund starten
-    "$BIN_PATH" "$INPUT_LOG" > /dev/null 2>&1 &
-    local TARGET_PID=$!
-
-    # 2. Polling: Warten bis VmRSS > 0 ist
-    local count=0
-    while [ $count -lt 100 ]; do
-        if [ -d "/proc/$TARGET_PID" ]; then
-            local rss=$(grep -i "VmRSS:" "/proc/$TARGET_PID/status" 2>/dev/null | awk '{print $2}')
-            if [ -n "$rss" ] && [ "$rss" -gt 0 ]; then
-                break
-            fi
-        fi
-        sleep 0.001
-        count=$((count + 1))
-    done
-
-    # 3. Prozess im Speicher stoppen
-    kill -STOP "$TARGET_PID" 2>/dev/null || true
-
-    # 4. smaps auslesen
-    python3 - "$TARGET_PID" "$TAG_NAME" "$LANG_NAME" "$SUMMARY_PMAP" <<'END'
-import sys
-import os
-import re
-
-pid = sys.argv[1]
-tag = sys.argv[2]
-lang = sys.argv[3]
-summary_pmap = sys.argv[4]
-
-smaps_path = f"/proc/{pid}/smaps"
-
-mapped_size, mapped_ws = 0.0, 0.0
-heap_ws = 0.0
-private_size, private_ws = 0.0, 0.0
-total_ws = 0.0
-
-if os.path.exists(smaps_path):
-    try:
-        with open(smaps_path, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-
-        for block in content.split("\n\n"):
-            lines = block.split("\n")
-            if not lines or not lines[0]:
-                continue
-            
-            header = lines[0]
-            match_path = re.search(r'/[^\s]+', header)
-            filepath = match_path.group(0) if match_path else ""
-
-            size_kb, rss_kb, priv_dirty_kb, priv_clean_kb = 0, 0, 0, 0
-
-            for line in lines[1:]:
-                if line.startswith("Size:"):
-                    size_kb = int(line.split()[1])
-                elif line.startswith("Rss:"):
-                    rss_kb = int(line.split()[1])
-                elif line.startswith("Private_Dirty:"):
-                    priv_dirty_kb = int(line.split()[1])
-                elif line.startswith("Private_Clean:"):
-                    priv_clean_kb = int(line.split()[1])
-
-            total_ws += rss_kb
-            priv_total = priv_dirty_kb + priv_clean_kb
-            private_ws += priv_total
-            private_size += size_kb
-
-            if "[heap]" in header:
-                heap_ws += rss_kb
-            elif filepath and not filepath.endswith(".so") and "/bin/" not in filepath and "go-parser" not in filepath and "zig-parser" not in filepath:
-                mapped_size += size_kb
-                mapped_ws += rss_kb
-
-        out_line = f"| {tag} | {lang} | {mapped_size/1024.0:.1f} | {mapped_ws/1024.0:.1f} | {heap_ws/1024.0:.2f} | {private_size/1024.0:.1f} | {total_ws/1024.0:.1f} |\n"
-        with open(summary_pmap, "a", encoding="utf-8") as f:
-            f.write(out_line)
-
-    except Exception as e:
-        print(f"  [pmap error] {e}")
-
-END
-
-    # 5. Prozess weiterlaufen lassen
-    kill -CONT "$TARGET_PID" 2>/dev/null || true
-    wait "$TARGET_PID" 2>/dev/null || true
-
-    # Temporäres Logfile für Stufe 3 wieder löschen
-    if [ "$TEMP_LOG_CREATED" = true ] && [ -f "$INPUT_LOG" ]; then
-        rm -f "$INPUT_LOG"
-    fi
 }
 
 # Hilfsfunktion für Go GC Trace Metriken
@@ -328,15 +201,11 @@ for TAG in "${TAGS[@]}"; do
     # 1. System & Process Metriken erfassen
     measure_sys_metrics "Go" "$GO_BIN" "$TAG"
     measure_sys_metrics "Zig" "$ZIG_BIN" "$TAG"
-    
-    # 2. Memory Mapping via pmap/smaps erfassen
-    measure_pmap_metrics "Go" "$GO_BIN" "$TAG"
-    measure_pmap_metrics "Zig" "$ZIG_BIN" "$TAG"
 
-    # 3. Go GC Trace erfassen
+    # 2. Go GC Trace erfassen
     measure_go_gc "$GO_BIN" "$TAG"
 
-    # 4. Hyperfine-Messung
+    # 3. Hyperfine-Messung
     echo "  > Starte Hyperfine..."
     hyperfine \
       --warmup 3 \
@@ -345,7 +214,7 @@ for TAG in "${TAGS[@]}"; do
       --command-name "Go ($TAG)" "$GO_BIN $LOG_FILE" \
       --command-name "Zig ($TAG)" "$ZIG_BIN $LOG_FILE" > /dev/null
 
-    # 5. Hyperfine-Daten aus JSON an SUMMARY_TIME hängen
+    # 4. Hyperfine-Daten aus JSON an SUMMARY_TIME hängen
     python3 - "$JSON_OUT" "$TAG" "$SUMMARY_TIME" <<'END'
 import sys
 import json

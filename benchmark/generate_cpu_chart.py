@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 # 1. Daten aus CSV einlesen
 df = pd.read_csv('diagramm_data_cpu.csv')
 
-# WICHTIG: Führende/nachfolgende Leerzeichen aus allen Textspalten entfernen!
 df['Stufe'] = df['Stufe'].str.strip()
 df['Sprache'] = df['Sprache'].str.strip()
 df['System'] = df['System'].str.strip()

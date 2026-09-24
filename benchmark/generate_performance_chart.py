@@ -2,7 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# 1. CSV-Datei einlesen
+# 1. CSV-Datei einlesen / Muss selbst erstellt werden
 df = pd.read_csv('diagramm_data.csv')
 
 # 2. X-Achsen-Kategorie zusammenführen
@@ -20,7 +20,6 @@ palette = {
 }
 
 # 4. Gruppiertes Balkendiagramm zeichnen
-# Durch die direkte Angabe von x, y und hue zeichnet Seaborn die Balken sauber.
 ax = sns.barplot(
     data=df,
     x='Kategorie',
@@ -30,14 +29,12 @@ ax = sns.barplot(
 )
 
 # 5. Fehlerbalken für StdDev exakt aus dem DataFrame hinzufügen
-# Iteration direkt über die sichtbaren Patches (Balken) und deren Zuordnung
 for p in ax.patches:
     height = p.get_height()
-    # Nur echte Balken berücksichtigen (Höhe größer 0 und keine versteckten Elemente)
+
     if height > 0 and not pd.isna(height):
         x_center = p.get_x() + p.get_width() / 2
         
-        # Den passenden Datensatz basierend auf der Höhe (Mean-Wert) finden
         row = df[df['Mean'] == height]
         if not row.empty:
             std_val = row['StdDev'].values[0]

@@ -13,6 +13,7 @@ vmmap_Go_new-stage3-windows.mmp
 vmmap_Zig_new-stage1-windows.mmp
 vmmap_Zig_new-stage2-windows.mmp
 vmmap_Zig_new-stage3-windows.mmp
+benchmark/results/
 
 # ------------------------------------------------------------------------------
 # Go

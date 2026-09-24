@@ -27,7 +27,7 @@ def analyze_gctrace(file_path):
                     max_heap_mb = heap_before
 
     print("=" * 50)
-    print(" 📊 GO GARBAGE COLLECTOR ZUSAMMENFASSUNG (GCTRACE)")
+    print("GO GARBAGE COLLECTOR ZUSAMMENFASSUNG (GCTRACE)")
     print("=" * 50)
     print(f"Anzahl GC-Zyklen (Total GC Runs) : {gc_count}")
     print(f"Gesamte GC-Pause (Total Wall Clock) : {total_clock_ms:.2f} ms")

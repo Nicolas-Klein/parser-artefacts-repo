@@ -3,7 +3,6 @@ import os
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Farben für universitäre/wissenschaftliche Arbeiten (Akzente für Go & Zig)
 COLOR_GO = "#00ADD8"   # Offizielles Go Cyan
 COLOR_ZIG = "#F7A41D"  # Offizielles Zig Orange
 
