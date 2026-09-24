@@ -5,6 +5,9 @@
 *.csv
 !benchmarks/results/*.csv  # Ausnahmen: Messergebnisse/Statistiken dürfen rein!
 data/
+benchmark/results
+*.pdf
+*.png
 
 # ------------------------------------------------------------------------------
 # Go
@@ -36,6 +39,7 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+generate_scalability_chart.py
 
 # ------------------------------------------------------------------------------
 # Betriebssystem & IDEs

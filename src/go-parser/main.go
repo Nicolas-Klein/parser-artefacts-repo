@@ -19,7 +19,6 @@ func mmapFileWindows(f *os.File, size int) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("CreateFileMapping failed: %v", err)
 	}
-	// Wichtig: Handle nach dem Mapping schließen
 	defer syscall.CloseHandle(h)
 
 	// MapViewOfFile
@@ -29,7 +28,6 @@ func mmapFileWindows(f *os.File, size int) ([]byte, error) {
 	}
 
 	// Byte-Slice aus Pointer rekonstruieren
-	// unsafe.Slice ist der moderne Go-Weg (ab Go 1.17)
 	var data []byte
 	sliceHeader := (*[1 << 30]byte)(unsafe.Pointer(addr))
 	data = sliceHeader[:size:size]
@@ -96,7 +94,6 @@ func parseLine(line []byte, entry *LogEntry) error {
 	suffix := line[lastQuote+1:]
 
 	// 1. Prefix manuell parsen (RemoteHost, Identity, User, Timestamp)
-	// Trennung nach Leerzeichen ohne strings.Fields (Allokationsfrei)
 	idx := 0
 
 	// RemoteHost
@@ -265,8 +262,6 @@ func main() {
 	}
 
 	if *profileFlag {
-		// Tipp: Garbage Collector kurz vor dem Heap-Snapshot steuern oder
-		// während des Parsings allozierten Gesamtspeicher auslesen
 		fm, _ := os.Create("mem.prof")
 		defer fm.Close()
 		pprof.WriteHeapProfile(fm)

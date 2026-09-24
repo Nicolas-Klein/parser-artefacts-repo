@@ -123,16 +123,16 @@ fn parseLine(line: []const u8) !LogEntry {
 }
 
 pub fn main() !void {
-    // 1. GeneralPurposeAllocator (Baseline Stufe 1)
+    // 1. GeneralPurposeAllocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // 2. ArenaAllocator initialisieren (Gegenstück zu Go's sync.Pool)
+    // 2. ArenaAllocator initialisieren
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    // 3. CLI-Argumente in Zig 0.14.0 (Stabil & Sauber)
+    // 3. CLI-Argumente in Zig 0.14.0
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
