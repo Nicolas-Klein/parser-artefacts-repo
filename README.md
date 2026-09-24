@@ -32,7 +32,7 @@ Nachdem Clonen des Repos können folgende Skripts je nach Betriebssystem ausgef�
 
 **Windows** ```.\benchmark\run_all_stages.ps1```
 
-Das Ausführen der Skripts, führt automatisch das Benchmarking für die drei Implementierungsstufen durch. Die Ergebnisse werden in der Datei master_summary.md ausgegeben. 
+Das Ausführen der Skripts erstellt automatisch eine Datei für das Benchmarking und führt automatisch das Benchmarking für die drei Implementierungsstufen durch. Die Ergebnisse werden in der Datei master_summary.md ausgegeben. 
 
 
 Bei der Erstellung der Dateien dieses Repos wurde KI verwendet, zum Debuggen und finden und beheben von Logik Fehlern. 
