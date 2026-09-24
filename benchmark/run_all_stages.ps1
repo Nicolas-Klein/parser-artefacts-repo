@@ -206,7 +206,7 @@ try {
 
     foreach ($Tag in $Tags) {
         Write-Host "`n--------------------------------------------------" -ForegroundColor Cyan
-        Write-Host " 🚀 Verarbeite Git-Tag: $Tag" -ForegroundColor Cyan
+        Write-Host " Verarbeite Git-Tag: $Tag" -ForegroundColor Cyan
         Write-Host "--------------------------------------------------" -ForegroundColor Cyan
 
         git checkout --force $Tag

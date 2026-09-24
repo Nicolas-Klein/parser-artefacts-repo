@@ -183,7 +183,7 @@ END
 for TAG in "${TAGS[@]}"; do
     echo ""
     echo "--------------------------------------------------"
-    echo " 🚀 Verarbeite Git-Tag: $TAG"
+    echo " Verarbeite Git-Tag: $TAG"
     echo "--------------------------------------------------"
 
     git checkout --force "$TAG" --quiet
