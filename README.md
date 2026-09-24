@@ -54,5 +54,6 @@ benchmark/run_all_stages.sh
 
 Das Ausführen der Skripts erstellt automatisch eine Datei für das Benchmarking und führt automatisch das Benchmarking für die drei Implementierungsstufen durch. Die Ergebnisse werden in der Datei master_summary.md ausgegeben. 
 
+Genauere Speicher-Messungen können mittels VMmap per Hand gemacht werden. Die automatisierte Ausführung von VMmap wurde versucht zu implementieren, dies stellte sich jedoch durch die schnelle und einmalige Ausführung der Artefakte als schwierig heraus.
 
 Bei der Erstellung der Dateien dieses Repos wurde KI verwendet, zum Debuggen und finden und beheben von Logik Fehlern. 
