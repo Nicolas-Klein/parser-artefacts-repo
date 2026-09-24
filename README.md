@@ -8,6 +8,12 @@ Dieses Repository enthält die Artefakte und den Quellcode.
 * `src/go-parser/` - Implementierung des Parsers in Go.
 * `src/zig-parser/` - Implementierung des Parsers in Zig.
 
+Die Tags dieses Projekts repräsentieren die 3 Implementierungsstufe der Artefakte. Aufgrund Systemspezifischen Code gibt es die Stufen jeweils für Windows und Linux.
+
+* Stufe 1: Unoptimierter Baseline-Parser: `new-stage1` für Linux und `new-stage1-windows` für Windows
+* Stufe 2: Speicheroptimierter-Parser: `new-stage2` für Linux und `new-stage2-windows` für Windows
+* Stufe 3: Parallelisierter-Parser: `new-stage3` für Linux und `new-stage3-windows` für Windows
+
 ## Voraussetzungen
 
 Um die Umgebung lokal auszuführen, werden folgende Tools benötigt:
